@@ -1,0 +1,162 @@
+"""
+Phase History (PH) extraction from MSTAR raw SAR data (박승준 담당 — Exp B).
+
+MSTAR binary format:
+    - Phoenix ASCII header (key=value pairs) terminated by "EndofPhoenixHeader\n"
+    - Binary payload: complex float32, row-major, real+imag interleaved
+
+Pipeline:
+    read_mstar_raw → complex HxW array
+    → 2D FFT (azimuth × range) → magnitude spectrum
+    → extract_scattering_centers → dominant azimuth peaks
+
+Reference: SENSE-Lab-OSU/mstar_data_aug (MATLAB counterpart)
+"""
+from __future__ import annotations
+
+import struct
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+import torch
+from torch import Tensor
+
+
+# ─── Raw file I/O ─────────────────────────────────────────────────────────────
+
+def read_mstar_header(path: Path) -> dict[str, str]:
+    """Parse the Phoenix ASCII header from a raw MSTAR file."""
+    header: dict[str, str] = {}
+    with open(path, "rb") as f:
+        for raw_line in f:
+            line = raw_line.decode("ascii", errors="replace").strip()
+            if line == "EndofPhoenixHeader":
+                break
+            if "=" in line:
+                k, _, v = line.partition("=")
+                header[k.strip()] = v.strip()
+    return header
+
+
+def _header_byte_length(path: Path) -> int:
+    """Find byte offset where binary data starts (after EndofPhoenixHeader\\n)."""
+    marker = b"EndofPhoenixHeader\n"
+    with open(path, "rb") as f:
+        data = f.read()
+    idx = data.find(marker)
+    if idx == -1:
+        raise ValueError(f"MSTAR header terminator not found in {path}")
+    return idx + len(marker)
+
+
+def read_mstar_raw(path: str | Path) -> np.ndarray:
+    """
+    Read a raw MSTAR file and return complex magnitude image.
+
+    Returns:
+        np.ndarray of shape [H, W], float32, linear amplitude (not dB).
+    """
+    path = Path(path)
+    header = read_mstar_header(path)
+
+    n_rows = int(header.get("NumberOfRows", header.get("numrows", 128)))
+    n_cols = int(header.get("NumberOfColumns", header.get("numcols", 128)))
+    offset = _header_byte_length(path)
+
+    n_complex = n_rows * n_cols
+    with open(path, "rb") as f:
+        f.seek(offset)
+        raw = f.read(n_complex * 8)  # 2 × float32 per sample
+
+    # MSTAR stores real then imaginary, big-endian
+    vals = struct.unpack(f">{n_complex * 2}f", raw)
+    arr = np.array(vals, dtype=np.float32).reshape(n_complex, 2)
+    complex_img = arr[:, 0] + 1j * arr[:, 1]
+    amplitude = np.abs(complex_img).reshape(n_rows, n_cols)
+    return amplitude
+
+
+def amplitude_to_tensor(amp: np.ndarray) -> Tensor:
+    """Normalize amplitude image to [0,1] float32 Tensor [1, H, W]."""
+    a = amp.astype(np.float32)
+    a = a / (a.max() + 1e-8)
+    return torch.from_numpy(a).unsqueeze(0)
+
+
+# ─── Phase history analysis ───────────────────────────────────────────────────
+
+@dataclass
+class PhaseHistoryMap:
+    """FFT-domain magnitude spectrum and derived scattering information."""
+    spectrum: np.ndarray          # [H, W] float32, log-magnitude of 2D FFT
+    scattering_centers: list[tuple[float, float]] = field(default_factory=list)
+    # [(azimuth_bin, range_bin), ...]  — in FFT coordinates
+
+
+def compute_phase_history(amplitude: np.ndarray) -> np.ndarray:
+    """
+    2D FFT of amplitude image → log-magnitude phase history spectrum.
+
+    Centred via fftshift so DC is at image centre.
+    """
+    spec = np.fft.fftshift(np.fft.fft2(amplitude))
+    log_spec = np.log1p(np.abs(spec)).astype(np.float32)
+    return log_spec
+
+
+def extract_scattering_centers(
+    amplitude: np.ndarray,
+    k: int = 5,
+    min_distance: int = 5,
+) -> PhaseHistoryMap:
+    """
+    Identify top-K scattering centres in the phase history domain.
+
+    Args:
+        amplitude:    [H, W] float32 linear amplitude image.
+        k:            Number of dominant scattering centres to return.
+        min_distance: Minimum pixel separation between centres.
+
+    Returns:
+        PhaseHistoryMap with spectrum and detected scattering_centers.
+    """
+    spectrum = compute_phase_history(amplitude)
+
+    # Non-maximum suppression: find local maxima
+    from scipy.ndimage import maximum_filter
+    local_max = maximum_filter(spectrum, size=min_distance * 2 + 1)
+    peaks_mask = (spectrum == local_max)
+
+    # Exclude DC (centre region)
+    h, w = spectrum.shape
+    cy, cx = h // 2, w // 2
+    r_dc = max(h, w) // 8
+    ys, xs = np.where(peaks_mask)
+    valid = ((ys - cy) ** 2 + (xs - cx) ** 2) > r_dc ** 2
+
+    peak_ys = ys[valid]
+    peak_xs = xs[valid]
+    peak_vals = spectrum[peak_ys, peak_xs]
+
+    # Top-K
+    order = np.argsort(peak_vals)[::-1][:k]
+    centers = [(float(peak_ys[i]), float(peak_xs[i])) for i in order]
+
+    return PhaseHistoryMap(spectrum=spectrum, scattering_centers=centers)
+
+
+def visualize_scattering(ph_map: PhaseHistoryMap, save_path: str | None = None):
+    """Plot phase history spectrum with marked scattering centres."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.imshow(ph_map.spectrum, cmap="hot", origin="upper")
+    for y, x in ph_map.scattering_centers:
+        ax.plot(x, y, "c+", markersize=10, markeredgewidth=2)
+    ax.set_title("Phase History Spectrum + Scattering Centers")
+    ax.axis("off")
+    if save_path:
+        plt.savefig(save_path, bbox_inches="tight", dpi=150)
+    plt.tight_layout()
+    return fig

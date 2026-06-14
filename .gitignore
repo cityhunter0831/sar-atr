@@ -1,0 +1,42 @@
+# Data and results (Drive에서 관리)
+data/
+results/
+*.pth
+*.pt
+*.pkl
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Optuna
+optuna.db
+
+# Logs
+*.log
+runs/
+wandb/
