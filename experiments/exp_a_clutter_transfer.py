@@ -38,8 +38,16 @@ from core.evaluate import evaluate
 RESULTS_DIR = Path("results/exp_a")
 DATA_ROOT = Path("data/clutter_gengzhe")
 
-# Classes used in Table 4 (subset available in MSTAR Targets package)
-TABLE4_CLASSES = ["BMP2", "BTR70", "T72"]
+# gengzhe2015 repo folder names → condition mapping
+GENG_FOLDERS = {
+    "MSTAROR":          "Original MSTAR Images",
+    "TrainOR+TestCT":   "Train_OR_Test_CT",
+    "TrainCT+TestCT":   "Train_CT_Test_CT",
+    "TrainCTx2+TestCT": "Train_CTx2_Test_CT",
+}
+
+# All 5 classes present in gengzhe2015 (lowercase folder names)
+TABLE4_CLASSES = ["2s1", "bmp2", "btr70", "t72", "zsu23"]
 
 Condition = Literal["MSTAROR", "TrainOR+TestCT", "TrainCT+TestCT", "TrainCTx2+TestCT"]
 
@@ -164,8 +172,28 @@ class ClutterTransferDataset(SARDataset):
 # ─── Condition builder ────────────────────────────────────────────────────────
 
 def _data_available() -> bool:
-    orig_dir = DATA_ROOT / "original"
-    return orig_dir.exists() and any(True for _ in orig_dir.iterdir())
+    orig_dir = DATA_ROOT / "Original MSTAR Images"
+    return orig_dir.exists() and any(orig_dir.iterdir())
+
+
+def _split_dataset(ds: MSTARImageFolder, train_ratio: float = 0.8, seed: int = 0):
+    """Deterministic 80/20 split into train/test MSTARImageFolder-compatible datasets."""
+    import random as _random
+    rng = _random.Random(seed)
+    indices = list(range(len(ds)))
+    rng.shuffle(indices)
+    n_train = int(len(indices) * train_ratio)
+
+    class _SubsetDataset(SARDataset):
+        def __init__(self, base, idxs):
+            self._base = base
+            self._idxs = idxs
+        def __len__(self): return len(self._idxs)
+        def __getitem__(self, i): return self._base[self._idxs[i]]
+        @property
+        def class_names(self): return self._base.class_names
+
+    return _SubsetDataset(ds, indices[:n_train]), _SubsetDataset(ds, indices[n_train:])
 
 
 def load_condition(
@@ -175,31 +203,40 @@ def load_condition(
 ) -> tuple[SARDataset, SARDataset]:
     """
     Returns (train_ds, test_ds) for the given condition.
+
+    gengzhe2015 folder mapping:
+      MSTAROR          → train+test split from 'Original MSTAR Images'
+      TrainOR+TestCT   → train from original, test from 'Train_OR_Test_CT'
+      TrainCT+TestCT   → train from 'Train_CT_Test_CT', test from same (split)
+      TrainCTx2+TestCT → train from 'Train_CTx2_Test_CT' (×2 aug), test from CT
+
     Falls back to MockSARDataset if real data is not found.
     """
     if not _data_available():
         print(f"[Exp A] Real data not found at {DATA_ROOT} — using MockSARDataset.")
-        n = 200
         return (
-            MockSARDataset(n=n, num_classes=len(class_names), seed=seed),
-            MockSARDataset(n=50, num_classes=len(class_names), seed=seed + 1),
+            MockSARDataset(n=200, num_classes=len(class_names), seed=seed),
+            MockSARDataset(n=50,  num_classes=len(class_names), seed=seed + 1),
         )
 
-    orig_train = MSTARImageFolder(DATA_ROOT / "original" / "train", class_names)
-    orig_test = MSTARImageFolder(DATA_ROOT / "original" / "test", class_names)
-    bg_pool = ClutterBgPool(DATA_ROOT / "clutter_bg", seed=seed)
-    ct_test = ClutterTransferDataset(orig_test, bg_pool, augment_factor=1)
+    orig_ds = MSTARImageFolder(DATA_ROOT / "Original MSTAR Images", class_names)
+    ct_or_ds = MSTARImageFolder(DATA_ROOT / "Train_OR_Test_CT",   class_names)
+    ct1_ds   = MSTARImageFolder(DATA_ROOT / "Train_CT_Test_CT",   class_names)
+    ct2_ds   = MSTARImageFolder(DATA_ROOT / "Train_CTx2_Test_CT", class_names)
+
+    orig_train, orig_test = _split_dataset(orig_ds, train_ratio=0.8, seed=seed)
+    _, ct_test            = _split_dataset(ct_or_ds, train_ratio=0.8, seed=seed)
+    ct1_train, _          = _split_dataset(ct1_ds,   train_ratio=0.8, seed=seed)
+    ct2_train, _          = _split_dataset(ct2_ds,   train_ratio=0.8, seed=seed)
 
     if condition == "MSTAROR":
         return orig_train, orig_test
     elif condition == "TrainOR+TestCT":
         return orig_train, ct_test
     elif condition == "TrainCT+TestCT":
-        ct_train = ClutterTransferDataset(orig_train, bg_pool, augment_factor=1)
-        return ct_train, ct_test
+        return ct1_train, ct_test
     elif condition == "TrainCTx2+TestCT":
-        ct_train_x2 = ClutterTransferDataset(orig_train, bg_pool, augment_factor=2)
-        return ct_train_x2, ct_test
+        return ct2_train, ct_test
     else:
         raise ValueError(f"Unknown condition: {condition!r}")
 
