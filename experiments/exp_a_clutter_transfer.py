@@ -85,7 +85,8 @@ class MSTARImageFolder(SARDataset):
 
     def __getitem__(self, idx: int) -> SARSample:
         path, label = self._samples[idx]
-        img = Image.open(path).convert("L")
+        # Convert via RGB first to avoid palette-mode artifacts
+        img = Image.open(path).convert("RGB").convert("L")
         arr = np.array(img, dtype=np.float32) / 255.0
         t = torch.from_numpy(arr).unsqueeze(0)  # [1, H, W]
 

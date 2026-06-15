@@ -8,10 +8,10 @@ class SMPL(nn.Module):
     def __init__(self, num_classes: int = 10):
         super().__init__()
         self.features = nn.Sequential(
-            nn.Conv2d(1, 16, 5, padding=2), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(16, 32, 5, padding=2), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, 5, padding=2), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, 5, padding=2), nn.ReLU(),
+            nn.Conv2d(1, 16, 5, padding=2), nn.BatchNorm2d(16), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(16, 32, 5, padding=2), nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, 5, padding=2), nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(64, 128, 5, padding=2), nn.BatchNorm2d(128), nn.ReLU(),
         )
         self.classifier = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
