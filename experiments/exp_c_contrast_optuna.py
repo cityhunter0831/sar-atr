@@ -30,9 +30,9 @@ from core.models import get_model
 from core.train import train_model
 
 RESULTS_DIR = Path("results/exp_c")
-DATA_ROOT = Path("data/mstar/mixed_targets")
+DATA_ROOT = Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD2")
 SAMPLE_ROOT = Path("data/sample/png_images")
-FIGURE1_CLASSES = ["2S1", "BRDM2", "ZSU23-4"]
+FIGURE1_CLASSES = ["2S1", "BRDM_2", "ZSU_23_4"]  # 실제 폴더명 (언더스코어)
 # SAMPLE dataset 클래스 (BMP2, BTR70, T72 등 MSTAR와 동일)
 SAMPLE_CLASSES = ["BMP2", "BTR70", "T72", "2S1", "BRDM2"]
 
@@ -68,11 +68,9 @@ class ElevationFilteredDataset(SARDataset):
                     break
 
         for idx, cls in enumerate(class_names):
-            cls_dir = el_dir / cls
-            if not cls_dir.exists():
-                continue
-            for p in sorted(cls_dir.iterdir()):
-                if p.suffix.lower() in {".png", ".jpg", ".0", ".017", ".030", ".045"}:
+            # 직접 경로 또는 COL<n>/SCENE<n>/<cls> 중간 경로 모두 지원
+            for p in el_dir.rglob(f"{cls}/*"):
+                if p.is_file():
                     self._samples.append((p, idx))
 
     def __len__(self) -> int:

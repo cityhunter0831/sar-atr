@@ -33,17 +33,18 @@ from core.models import get_model
 from core.train import train_model
 
 RESULTS_DIR = Path("results/exp_d")
-MSTAR_DIR = Path("data/mstar/mixed_targets")
+# MSTAR Targets (BMP2/BTR70/T72) — train split
+MSTAR_DIR = Path("data/mstar/MSTAR_PUBLIC_TARGETS_CHIPS_T72_BMP2_BTR70_SLICY/TARGETS/TRAIN/17_DEG")
 SARSHIP_DIR = Path("data/sarship")
 
-# Full 10-class MSTAR set
-ALL_CLASSES = ["BMP2", "BTR70", "T72", "2S1", "BRDM2", "BTR60", "D7", "T62", "ZIL131", "ZSU23-4"]
+# 현재 확보된 클래스 (MSTAR Targets chips)
+ALL_CLASSES = ["BMP2", "BTR70", "T72"]
 
 # Holdout combinations: J unknown classes removed from training
 HOLDOUT_CONFIGS: dict[int, list[str]] = {
-    1: ["ZSU23-4"],
-    2: ["ZSU23-4", "ZIL131"],
-    3: ["ZSU23-4", "ZIL131", "T62"],
+    1: ["T72"],
+    2: ["T72", "BTR70"],
+    3: [],  # 3클래스에서 3개 holdout은 불가 — mock으로 대체
 }
 
 
@@ -62,7 +63,9 @@ class FolderDataset(SARDataset):
             if not cls_dir.exists():
                 continue
             for p in sorted(cls_dir.iterdir()):
-                if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif"}:
+                if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif"} or (
+                    p.is_file() and not p.suffix
+                ):
                     self._samples.append((p, idx))
 
     def __len__(self) -> int:
@@ -70,8 +73,13 @@ class FolderDataset(SARDataset):
 
     def __getitem__(self, idx: int) -> SARSample:
         path, label = self._samples[idx]
-        img = Image.open(path).convert("L")
-        arr = np.array(img, dtype=np.float32) / 255.0
+        try:
+            img = Image.open(path).convert("L")
+            arr = np.array(img, dtype=np.float32) / 255.0
+        except Exception:
+            from augmentation.ph_extraction import read_mstar_raw
+            raw = read_mstar_raw(path)
+            arr = (raw / (raw.max() + 1e-8)).astype(np.float32)
         t = torch.from_numpy(arr).unsqueeze(0)
         meta = {"class_name": self._class_names[label], "source": str(path)}
         if self._aug is not None:

@@ -32,7 +32,7 @@ from augmentation.ph_extraction import (
 )
 from core.models import get_model
 
-MSTAR_RAW_DIR = Path("data/mstar/targets")
+MSTAR_RAW_DIR = Path("data/mstar/MSTAR_PUBLIC_TARGETS_CHIPS_T72_BMP2_BTR70_SLICY/TARGETS/TRAIN/17_DEG")
 RESULTS_DIR = Path("results/exp_b")
 CLASSES = ["BMP2", "BTR70", "T72"]
 
@@ -185,7 +185,9 @@ def run(
     raw_files: list[Path] = []
     if MSTAR_RAW_DIR.exists():
         for cls in CLASSES:
-            raw_files.extend(sorted((MSTAR_RAW_DIR / cls).glob("*.0*"))[:n_samples])
+            cls_dir = MSTAR_RAW_DIR / cls
+            if cls_dir.exists():
+                raw_files.extend(sorted(cls_dir.iterdir())[:n_samples])
     if not raw_files:
         print("[Exp B] No MSTAR raw files found — skipping real analysis.")
         print("        Download MSTAR Targets package and place under data/mstar/targets/<class>/")
