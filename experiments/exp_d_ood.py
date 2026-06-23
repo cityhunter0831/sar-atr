@@ -231,8 +231,12 @@ def run(
         model = get_model(model_name, num_classes=len(known))
 
         if ckpt.exists():
-            model.load_state_dict(torch.load(ckpt, map_location="cpu"))
-            print(f"  Loaded checkpoint: {ckpt}")
+            try:
+                model.load_state_dict(torch.load(ckpt, map_location="cpu"))
+                print(f"  Loaded checkpoint: {ckpt}")
+            except RuntimeError:
+                print(f"  Checkpoint 구조 불일치 — 처음부터 학습합니다: {ckpt}")
+                ckpt = Path("nonexistent")  # force retrain
         else:
             print(f"  Training {model_name} (J={j}, seed={seed}) ...")
             config = TrainConfig(
