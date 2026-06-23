@@ -135,8 +135,10 @@ def load_id_holdout(
             MockSARDataset(n=100, num_classes=1, seed=3),  # mock OE
         )
 
-    train_ds = FolderDataset(MSTAR_DIR, known)
-    test_id_ds = FolderDataset(MSTAR_DIR, known)
+    # BUG-2 수정: 동일 폴더를 train/test에 그대로 쓰면 데이터 누수 → 80/20 분리
+    from experiments.exp_a_clutter_transfer import MSTARImageFolder, _split_dataset
+    full_known = MSTARImageFolder(MSTAR_DIR, known)
+    train_ds, test_id_ds = _split_dataset(full_known, train_ratio=0.8, seed=0)
     test_holdout_ds = FolderDataset(MSTAR_DIR, holdout)
 
     sar_ship = SARShipDataset(SARSHIP_DIR)

@@ -44,6 +44,7 @@ class TrainConfig:
     lr_decay_factor: float = 0.1
     loss_type: str = "lsm"   # "lsm" (label smoothing) | "at" (adversarial training)
     label_smoothing: float = 0.1
+    optimizer: str = "adam"  # "adam" | "sgd" — Adam이 SAR 데이터에서 더 빠른 수렴
     seed: int = 0
     num_workers: int = 0
     device: Optional[str] = None  # None → auto-detect

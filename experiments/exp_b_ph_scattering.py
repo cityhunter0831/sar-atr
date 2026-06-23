@@ -26,6 +26,7 @@ import torch.nn.functional as F
 from augmentation.ph_extraction import (
     amplitude_to_tensor,
     extract_scattering_centers,
+    extract_spatial_scattering_centers,
     read_mstar_raw,
     visualize_scattering,
 )
@@ -125,6 +126,8 @@ def analyse_sample(
     image_t = amplitude_to_tensor(amplitude)
 
     ph_map = extract_scattering_centers(amplitude, k=k)
+    # BUG-1 수정: Grad-CAM과 IoU 비교는 공간 도메인 좌표 사용
+    spatial_centers = extract_spatial_scattering_centers(amplitude, k=k)
 
     # Grad-CAM
     gcam = GradCAM(model)
@@ -132,7 +135,7 @@ def analyse_sample(
     gcam.remove()
 
     h, w = amplitude.shape
-    scatter_mask = _centers_to_mask(ph_map.scattering_centers, h, w)
+    scatter_mask = _centers_to_mask(spatial_centers, h, w)
     iou = _iou(scatter_mask, cam)
 
     if save_dir is not None:
@@ -154,7 +157,7 @@ def analyse_sample(
         fig.savefig(save_dir / f"{raw_path.stem}_analysis.png", dpi=150)
         plt.close(fig)
 
-    return {"file": raw_path.name, "iou": iou, "n_centers": len(ph_map.scattering_centers)}
+    return {"file": raw_path.name, "iou": iou, "n_centers": len(spatial_centers)}
 
 
 # ─── Runner ───────────────────────────────────────────────────────────────────

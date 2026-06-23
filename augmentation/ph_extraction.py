@@ -146,6 +146,28 @@ def extract_scattering_centers(
     return PhaseHistoryMap(spectrum=spectrum, scattering_centers=centers)
 
 
+def extract_spatial_scattering_centers(
+    amplitude: np.ndarray,
+    k: int = 5,
+    min_distance: int = 5,
+) -> list[tuple[float, float]]:
+    """
+    공간 도메인 amplitude 이미지에서 직접 산란점(밝은 점) 좌표 추출.
+
+    Grad-CAM과 IoU 비교를 위해 공간 도메인 좌표를 반환.
+    extract_scattering_centers()의 FFT 도메인과 달리 (row, col) 픽셀 좌표.
+    """
+    from scipy.ndimage import maximum_filter
+    local_max = maximum_filter(amplitude, size=min_distance * 2 + 1)
+    peaks_mask = (amplitude == local_max) & (amplitude > amplitude.mean())
+    ys, xs = np.where(peaks_mask)
+    if len(ys) == 0:
+        return []
+    vals = amplitude[ys, xs]
+    order = np.argsort(vals)[::-1][:k]
+    return [(float(ys[i]), float(xs[i])) for i in order]
+
+
 def visualize_scattering(ph_map: PhaseHistoryMap, save_path: str | None = None):
     """Plot phase history spectrum with marked scattering centres."""
     import matplotlib.pyplot as plt

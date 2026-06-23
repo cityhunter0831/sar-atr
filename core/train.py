@@ -92,10 +92,13 @@ def train_model(
     else:
         criterion = nn.CrossEntropyLoss()
 
-    optimizer = optim.SGD(model.parameters(), lr=config.lr, momentum=0.9, weight_decay=1e-4)
+    if getattr(config, "optimizer", "adam") == "sgd":
+        optimizer = optim.SGD(model.parameters(), lr=config.lr, momentum=0.9, weight_decay=1e-4)
+    else:
+        optimizer = optim.Adam(model.parameters(), lr=config.lr, weight_decay=1e-4)
 
     for epoch in tqdm(range(config.epochs), desc=f"[{config.model_name}] train", leave=False):
-        # Step LR
+        # Step LR (Adam에서도 decay 적용)
         lr = config.lr if epoch < config.lr_decay_epoch else config.lr * config.lr_decay_factor
         for pg in optimizer.param_groups:
             pg["lr"] = lr

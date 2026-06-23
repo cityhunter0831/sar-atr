@@ -130,7 +130,9 @@ def make_optuna_objective(train_ds, val_ds, base_config, n_epochs_trial: int = 1
     from core.interfaces import TrainConfig
     import copy
 
-    class _AugmentedDataset:
+    from core.interfaces import SARDataset as _SARDataset
+
+    class _AugmentedDataset(_SARDataset):
         def __init__(self, ds, aug):
             self._ds = ds
             self._aug = aug
