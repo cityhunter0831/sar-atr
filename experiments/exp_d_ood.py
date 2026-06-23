@@ -40,14 +40,14 @@ MSTAR_MIXED_DIRS = [
 ]
 SARSHIP_DIR = Path("data/sarship")
 
-# 확보된 7개 클래스 (Targets 3 + Mixed 4)
-ALL_CLASSES = ["BMP2", "BTR70", "T72", "2S1", "BRDM_2", "BTR_60", "ZSU_23_4"]
+# 확보된 전체 10개 클래스 (Targets 3 + Mixed 7)
+ALL_CLASSES = ["BMP2", "BTR70", "T72", "2S1", "BRDM_2", "BTR_60", "D7", "T62", "ZIL131", "ZSU_23_4"]
 
 # Holdout combinations: J unknown classes removed from training
 HOLDOUT_CONFIGS: dict[int, list[str]] = {
     1: ["ZSU_23_4"],
-    2: ["ZSU_23_4", "BRDM_2"],
-    3: ["ZSU_23_4", "BRDM_2", "BTR_60"],
+    2: ["ZSU_23_4", "ZIL131"],
+    3: ["ZSU_23_4", "ZIL131", "T62"],
 }
 
 
