@@ -33,18 +33,21 @@ from core.models import get_model
 from core.train import train_model
 
 RESULTS_DIR = Path("results/exp_d")
-# MSTAR Targets (BMP2/BTR70/T72) — train split
-MSTAR_DIR = Path("data/mstar/MSTAR_PUBLIC_TARGETS_CHIPS_T72_BMP2_BTR70_SLICY/TARGETS/TRAIN/17_DEG")
+MSTAR_TARGETS_DIR = Path("data/mstar/MSTAR_PUBLIC_TARGETS_CHIPS_T72_BMP2_BTR70_SLICY/TARGETS/TRAIN/17_DEG")
+MSTAR_MIXED_DIRS = [
+    Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD1"),
+    Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD2"),
+]
 SARSHIP_DIR = Path("data/sarship")
 
-# 현재 확보된 클래스 (MSTAR Targets chips)
-ALL_CLASSES = ["BMP2", "BTR70", "T72"]
+# 확보된 7개 클래스 (Targets 3 + Mixed 4)
+ALL_CLASSES = ["BMP2", "BTR70", "T72", "2S1", "BRDM_2", "BTR_60", "ZSU_23_4"]
 
 # Holdout combinations: J unknown classes removed from training
 HOLDOUT_CONFIGS: dict[int, list[str]] = {
-    1: ["T72"],
-    2: ["T72", "BTR70"],
-    3: [],  # 3클래스에서 3개 holdout은 불가 — mock으로 대체
+    1: ["ZSU_23_4"],
+    2: ["ZSU_23_4", "BRDM_2"],
+    3: ["ZSU_23_4", "BRDM_2", "BTR_60"],
 }
 
 
@@ -53,20 +56,20 @@ HOLDOUT_CONFIGS: dict[int, list[str]] = {
 class FolderDataset(SARDataset):
     """Generic image folder dataset compatible with SARDataset interface."""
 
-    def __init__(self, root: Path, class_names: list[str], augmentation=None):
+    def __init__(self, roots: "Path | list[Path]", class_names: list[str], augmentation=None):
         self._class_names = class_names
         self._aug = augmentation
         self._samples: list[tuple[Path, int]] = []
 
-        for idx, cls in enumerate(class_names):
-            cls_dir = root / cls
-            if not cls_dir.exists():
-                continue
-            for p in sorted(cls_dir.iterdir()):
-                if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif"} or (
-                    p.is_file() and not p.suffix
-                ):
-                    self._samples.append((p, idx))
+        if isinstance(roots, Path):
+            roots = [roots]
+
+        for root in roots:
+            for idx, cls in enumerate(class_names):
+                # 직접 경로(Targets) 또는 COL/SCENE 중간 경로(Mixed) 모두 지원
+                for p in root.rglob(f"{cls}/*"):
+                    if p.is_file():
+                        self._samples.append((p, idx))
 
     def __len__(self) -> int:
         return len(self._samples)
@@ -121,7 +124,7 @@ class SARShipDataset(SARDataset):
 # ─── Data loading ─────────────────────────────────────────────────────────────
 
 def _data_available() -> bool:
-    return MSTAR_DIR.exists() and any(MSTAR_DIR.iterdir())
+    return MSTAR_TARGETS_DIR.exists() and any(MSTAR_TARGETS_DIR.iterdir())
 
 
 def load_id_holdout(
@@ -135,7 +138,7 @@ def load_id_holdout(
     known = [c for c in class_names if c not in holdout]
 
     if not _data_available():
-        print(f"[Exp D] Real data not found at {MSTAR_DIR} — using MockSARDataset.")
+        print(f"[Exp D] Real data not found at {MSTAR_TARGETS_DIR} — using MockSARDataset.")
         return (
             MockSARDataset(n=300, num_classes=len(known), seed=0),
             MockSARDataset(n=100, num_classes=len(known), seed=1),
@@ -143,11 +146,19 @@ def load_id_holdout(
             MockSARDataset(n=100, num_classes=1, seed=3),  # mock OE
         )
 
-    # BUG-2 수정: 동일 폴더를 train/test에 그대로 쓰면 데이터 누수 → 80/20 분리
-    from experiments.exp_a_clutter_transfer import MSTARImageFolder, _split_dataset
-    full_known = MSTARImageFolder(MSTAR_DIR, known)
-    train_ds, test_id_ds = _split_dataset(full_known, train_ratio=0.8, seed=0)
-    test_holdout_ds = FolderDataset(MSTAR_DIR, holdout)
+    # BUG-2 수정: 80/20 분리로 데이터 누수 방지
+    # Targets + Mixed CD1/CD2 합산 로드
+    all_roots = [MSTAR_TARGETS_DIR] + MSTAR_MIXED_DIRS
+    from core.train import _set_seed
+    full_known = FolderDataset(all_roots, known)
+    from torch.utils.data import random_split
+    _set_seed(0)
+    n_train = int(len(full_known) * 0.8)
+    n_test = len(full_known) - n_train
+    import torch
+    train_ds, test_id_ds = random_split(full_known, [n_train, n_test],
+                                        generator=torch.Generator().manual_seed(0))
+    test_holdout_ds = FolderDataset(all_roots, holdout)
 
     sar_ship = SARShipDataset(SARSHIP_DIR)
     if len(sar_ship) == 0:
