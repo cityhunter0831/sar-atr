@@ -187,7 +187,7 @@ def run(
         for cls in CLASSES:
             cls_dir = MSTAR_RAW_DIR / cls
             if cls_dir.exists():
-                raw_files.extend(sorted(cls_dir.iterdir())[:n_samples])
+                raw_files.extend(p for p in cls_dir.rglob("*") if p.is_file())
     if not raw_files:
         print("[Exp B] No MSTAR raw files found — skipping real analysis.")
         print("        Download MSTAR Targets package and place under data/mstar/targets/<class>/")
