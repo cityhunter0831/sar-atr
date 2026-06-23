@@ -31,7 +31,7 @@ from core.train import train_model
 
 RESULTS_DIR = Path("results/exp_c")
 DATA_ROOT = Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD2")
-SAMPLE_ROOT = Path("data/sample/png_images")
+SAMPLE_ROOT = Path("data/sample/png_images/decibel")
 FIGURE1_CLASSES = ["2S1", "BRDM_2", "ZSU_23_4"]  # 실제 폴더명 (언더스코어)
 # SAMPLE dataset 클래스 (BMP2, BTR70, T72 등 MSTAR와 동일)
 SAMPLE_CLASSES = ["BMP2", "BTR70", "T72", "2S1", "BRDM2"]
@@ -194,6 +194,14 @@ def load_sample(
     train_ds = SampleDataset(SAMPLE_ROOT, "synthetic", class_names)
     test_ds  = SampleDataset(SAMPLE_ROOT, "measured",  class_names)
     print(f"[Exp C] SAMPLE loaded: train(synthetic)={len(train_ds)}, test(measured)={len(test_ds)}")
+
+    if len(train_ds) == 0 or len(test_ds) == 0:
+        print(f"[Exp C] 데이터 0개 — SAMPLE_ROOT={SAMPLE_ROOT} 경로 확인 필요. MockSARDataset으로 대체.")
+        return (
+            MockSARDataset(n=200, num_classes=len(class_names), seed=0),
+            MockSARDataset(n=60,  num_classes=len(class_names), seed=1),
+        )
+
     return train_ds, test_ds
 
 
