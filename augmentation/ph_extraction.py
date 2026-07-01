@@ -77,6 +77,57 @@ def read_mstar_raw(path: str | Path) -> np.ndarray:
     return amplitude
 
 
+def read_mstar_complex(path: str | Path) -> np.ndarray:
+    """
+    Read a raw MSTAR file and return raw complex array (no abs).
+
+    Returns:
+        np.ndarray of shape [H, W], complex64.
+    """
+    path = Path(path)
+    header = read_mstar_header(path)
+    n_rows = int(header.get("NumberOfRows", header.get("numrows", 128)))
+    n_cols = int(header.get("NumberOfColumns", header.get("numcols", 128)))
+    offset = _header_byte_length(path)
+
+    n_complex = n_rows * n_cols
+    with open(path, "rb") as f:
+        f.seek(offset)
+        raw = f.read(n_complex * 8)
+
+    vals = struct.unpack(f">{n_complex * 2}f", raw)
+    arr = np.array(vals, dtype=np.float32).reshape(n_complex, 2)
+    return (arr[:, 0] + 1j * arr[:, 1]).reshape(n_rows, n_cols)
+
+
+def interpolate_phase_history(
+    img_a: np.ndarray,
+    img_b: np.ndarray,
+    alpha: float = 0.5,
+) -> np.ndarray:
+    """
+    논문 Section 2.1: 두 SAR 이미지의 Phase History 도메인 사이를 보간.
+
+    Args:
+        img_a: complex HxW array (elevation angle α)
+        img_b: complex HxW array (elevation angle β), same shape as img_a
+        alpha: interpolation weight — 0.0 → pure A, 1.0 → pure B
+
+    Returns:
+        Amplitude image float32 [H, W] of the interpolated SAR image.
+    """
+    # IFFT: image domain → phase history (spatial frequency) domain
+    ph_a = np.fft.ifft2(img_a)
+    ph_b = np.fft.ifft2(img_b)
+
+    # Linear interpolation in PH domain
+    ph_interp = (1.0 - alpha) * ph_a + alpha * ph_b
+
+    # FFT back to image domain, take magnitude
+    img_interp = np.fft.fft2(ph_interp)
+    return np.abs(img_interp).astype(np.float32)
+
+
 def amplitude_to_tensor(amp: np.ndarray) -> Tensor:
     """Normalize amplitude image to [0,1] float32 Tensor [1, H, W]."""
     a = amp.astype(np.float32)

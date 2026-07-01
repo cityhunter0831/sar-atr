@@ -34,7 +34,7 @@ DATA_ROOT = Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD2")
 SAMPLE_ROOT = Path("data/sample/png_images/decibel")
 FIGURE1_CLASSES = ["2S1", "BRDM_2", "ZSU_23_4"]  # 실제 폴더명 (언더스코어)
 # SAMPLE dataset 클래스 (BMP2, BTR70, T72 등 MSTAR와 동일)
-SAMPLE_CLASSES = ["BMP2", "BTR70", "T72", "2S1", "BRDM2"]
+SAMPLE_CLASSES = ["2s1", "bmp2", "btr70", "m1", "m2", "m35", "m60", "m548", "t72", "zsu23"]
 
 
 # ─── Dataset helpers ──────────────────────────────────────────────────────────
@@ -125,25 +125,27 @@ class SampleDataset(SARDataset):
     """
     SAMPLE dataset (benjaminlewis-afrl/SAMPLE_dataset_public) loader.
 
-    구조: data/sample/png_images/<class_name>/measured/*.png
-              data/sample/png_images/<class_name>/synthetic/*.png
-    split: "measured" | "synthetic"
+    구조: data/sample/png_images/decibel/real/<class_name>/*.png
+              data/sample/png_images/decibel/synth/<class_name>/*.png
+    split: "real" | "synth"
     """
 
     def __init__(self, root: Path, split: str, class_names: list[str]):
-        assert split in ("measured", "synthetic"), f"split must be 'measured' or 'synthetic', got {split!r}"
+        assert split in ("real", "synth"), f"split must be 'real' or 'synth', got {split!r}"
         self._class_names = class_names
         self._split = split
         self._samples: list[tuple[Path, int]] = []
 
         for idx, cls in enumerate(class_names):
-            cls_dir = root / cls / split
+            cls_dir = root / split / cls
             if not cls_dir.exists():
                 # 대소문자 차이 허용
-                for d in sorted(root.iterdir()):
-                    if d.name.lower() == cls.lower():
-                        cls_dir = d / split
-                        break
+                split_dir = root / split
+                if split_dir.exists():
+                    for d in sorted(split_dir.iterdir()):
+                        if d.name.lower() == cls.lower():
+                            cls_dir = d
+                            break
             if not cls_dir.exists():
                 continue
             for p in sorted(cls_dir.iterdir()):
@@ -179,8 +181,8 @@ def load_sample(
     class_names: list[str] = SAMPLE_CLASSES,
 ) -> tuple[SARDataset, SARDataset]:
     """
-    Returns (train_synthetic, test_measured).
-    SAMPLE의 synthetic으로 훈련 → measured로 테스트 = 논문 Figure 1 원본 방법.
+    Returns (train_synth, test_real).
+    SAMPLE의 synth로 훈련 → real로 테스트 = 논문 Figure 1 원본 방법.
     Falls back to mock if data is absent.
     """
     if not _sample_available():
@@ -191,8 +193,8 @@ def load_sample(
             MockSARDataset(n=60,  num_classes=len(class_names), seed=1),
         )
 
-    train_ds = SampleDataset(SAMPLE_ROOT, "synthetic", class_names)
-    test_ds  = SampleDataset(SAMPLE_ROOT, "measured",  class_names)
+    train_ds = SampleDataset(SAMPLE_ROOT, "synth", class_names)
+    test_ds  = SampleDataset(SAMPLE_ROOT, "real",  class_names)
     print(f"[Exp C] SAMPLE loaded: train(synthetic)={len(train_ds)}, test(measured)={len(test_ds)}")
 
     if len(train_ds) == 0 or len(test_ds) == 0:
