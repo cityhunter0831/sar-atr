@@ -110,7 +110,7 @@ def _mahalanobis_scores(
         scores = []
         for f in feats:
             dists = [float((f - mu) @ cov_inv @ (f - mu)) for mu in means]
-            scores.append(-min(dists))  # negative distance → higher = more ID
+            scores.append(-0.5 * min(dists))  # negative Mahalanobis distance → higher = more ID
         return np.array(scores)
 
     return _score(test_ds), _score(ood_ds)
@@ -137,7 +137,7 @@ def _odin_scores(
             loss.backward()
             perturbed = (imgs - epsilon * imgs.grad.sign()).detach().clamp(0.0, 1.0)
             with torch.no_grad():
-                s = F.softmax(model(perturbed) / temperature, dim=1).max(1).values
+                s = F.softmax(model(perturbed), dim=1).max(1).values  # perturbation 후 unscaled
             scores.append(s.cpu().numpy())
         return np.concatenate(scores)
 

@@ -41,6 +41,8 @@ from core.interfaces import EvalResult, SARDataset, SARSample, TrainConfig
 from core.mock_data import MockSARDataset
 from core.models import get_model
 from core.train import train_model
+from gradcam.cam import GradCAM
+from gradcam.scatter_overlap import centers_to_mask, iou as compute_iou
 
 MSTAR_RAW_DIR = Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD2")
 RESULTS_DIR = Path("results/exp_b")
@@ -154,70 +156,6 @@ class PHAugmentedDataset(SARDataset):
     @property
     def class_names(self) -> list[str]:
         return self._class_names
-
-
-# ─── Grad-CAM (우리 팀 개선 #3) ───────────────────────────────────────────────
-
-class GradCAM:
-    """Minimal Grad-CAM for conv-based models (우리 팀 개선 — 산란점 일치도 검증)."""
-
-    def __init__(self, model: torch.nn.Module):
-        self.model = model
-        self._fmaps: torch.Tensor | None = None
-        self._grads: torch.Tensor | None = None
-        self._handle_f = None
-        self._handle_g = None
-        self._hook_last_conv()
-
-    def _hook_last_conv(self):
-        last_conv = None
-        for m in self.model.modules():
-            if isinstance(m, torch.nn.Conv2d):
-                last_conv = m
-        assert last_conv is not None
-
-        def fwd_hook(_, __, output):
-            self._fmaps = output
-
-        def bwd_hook(_, __, grad_out):
-            self._grads = grad_out[0]
-
-        self._handle_f = last_conv.register_forward_hook(fwd_hook)
-        self._handle_g = last_conv.register_full_backward_hook(bwd_hook)
-
-    def __call__(self, x: torch.Tensor, class_idx: int | None = None) -> np.ndarray:
-        self.model.zero_grad()
-        logits = self.model(x)
-        target = logits[0, class_idx if class_idx is not None else logits.argmax(1).item()]
-        target.backward()
-        weights = self._grads.mean(dim=[2, 3], keepdim=True)
-        cam = F.relu((weights * self._fmaps).sum(dim=1, keepdim=True))
-        cam = F.interpolate(cam, size=x.shape[-2:], mode="bilinear", align_corners=False)
-        cam = cam.squeeze().detach().numpy()
-        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-        return cam
-
-    def remove(self):
-        if self._handle_f:
-            self._handle_f.remove()
-        if self._handle_g:
-            self._handle_g.remove()
-
-
-def _centers_to_mask(centers, h, w, radius=5):
-    mask = np.zeros((h, w), dtype=np.float32)
-    for cy, cx in centers:
-        iy, ix = int(np.clip(cy, 0, h - 1)), int(np.clip(cx, 0, w - 1))
-        y0, y1 = max(0, iy - radius), min(h, iy + radius)
-        x0, x1 = max(0, ix - radius), min(w, ix + radius)
-        mask[y0:y1, x0:x1] = 1.0
-    return mask
-
-
-def _iou(mask_a, mask_b, threshold=0.5):
-    a, b = mask_a > threshold, mask_b > threshold
-    inter, union = (a & b).sum(), (a | b).sum()
-    return float(inter / union) if union > 0 else 0.0
 
 
 # ─── Main runners ─────────────────────────────────────────────────────────────
@@ -343,8 +281,8 @@ def run_gradcam_analysis(
         gcam.remove()
 
         h, w = amp.shape
-        scatter_mask = _centers_to_mask(spatial_centers, h, w)
-        iou = _iou(scatter_mask, cam)
+        scatter_mask = centers_to_mask(spatial_centers, h, w)
+        iou = compute_iou(scatter_mask, cam)
 
         fig, axes = plt.subplots(1, 3, figsize=(12, 4))
         axes[0].imshow(amp, cmap="gray"); axes[0].set_title("Amplitude"); axes[0].axis("off")
