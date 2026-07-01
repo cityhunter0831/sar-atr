@@ -27,10 +27,15 @@ from torch import Tensor
 
 def read_mstar_header(path: Path) -> dict[str, str]:
     """Parse the Phoenix ASCII header from a raw MSTAR file."""
-    header: dict[str, str] = {}
-    offset = _header_byte_length(path)
+    import re
     with open(path, "rb") as f:
-        text = f.read(offset).decode("ascii", errors="replace")
+        peek = f.read(256)
+    hlen_m = re.search(rb"PhoenixHeaderLength=\s*(\d+)", peek)
+    ascii_len = int(hlen_m.group(1)) if hlen_m else 2048
+
+    header: dict[str, str] = {}
+    with open(path, "rb") as f:
+        text = f.read(ascii_len).decode("ascii", errors="replace")
     for line in text.splitlines():
         line = line.strip().strip("[]")
         if line.lower().startswith("endofphoenixheader"):
@@ -42,22 +47,27 @@ def read_mstar_header(path: Path) -> dict[str, str]:
 
 
 def _header_byte_length(path: Path) -> int:
-    """Return byte offset where binary payload starts.
+    """Return byte offset where SAR data starts.
 
-    실제 MSTAR Mixed Targets 파일은 헤더 안에 PhoenixSigSize(~24KB)가 포함되어
-    있어 EndofPhoenixHeader 마커가 4KB 이후에 있음. PhoenixHeaderLength 필드를
-    직접 파싱해 오프셋을 구하는 방식으로 교체.
+    MSTAR Mixed Targets 파일 구조:
+        [ASCII header  — PhoenixHeaderLength bytes]
+        [Signature data — PhoenixSigSize bytes    ]
+        [SAR data (complex float32)               ]
+
+    올바른 오프셋 = PhoenixHeaderLength + PhoenixSigSize.
+    PhoenixHeaderLength만 쓰면 Signature 구간을 SAR 데이터로 잘못 읽음.
     """
     import re
     with open(path, "rb") as f:
-        # 헤더 메타 필드는 항상 첫 256바이트 이내에 존재
         peek = f.read(256)
 
-    m = re.search(rb"PhoenixHeaderLength=\s*(\d+)", peek)
-    if m:
-        return int(m.group(1))
+    hlen_m = re.search(rb"PhoenixHeaderLength=\s*(\d+)", peek)
+    sig_m  = re.search(rb"PhoenixSigSize=\s*(\d+)", peek)
 
-    # 폴백: 파일 전체에서 종결자 탐색 (여러 변형 대응)
+    if hlen_m and sig_m:
+        return int(hlen_m.group(1)) + int(sig_m.group(1))
+
+    # 폴백: 파일 전체에서 종결자 탐색
     with open(path, "rb") as f:
         data = f.read()
     for marker in (b"[EndofPhoenixHeader]", b"EndofPhoenixHeader\n", b"EndofPhoenixHeader\r\n"):
