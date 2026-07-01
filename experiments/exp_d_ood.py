@@ -77,12 +77,17 @@ class FolderDataset(SARDataset):
     def __getitem__(self, idx: int) -> SARSample:
         path, label = self._samples[idx]
         try:
-            img = Image.open(path).convert("L")
+            img = Image.open(path).convert("L").resize((128, 128))
             arr = np.array(img, dtype=np.float32) / 255.0
         except Exception:
             from augmentation.ph_extraction import read_mstar_raw
+            import PIL.Image as _PILImage
             raw = read_mstar_raw(path)
             arr = (raw / (raw.max() + 1e-8)).astype(np.float32)
+            arr = np.array(
+                _PILImage.fromarray((arr * 255).astype(np.uint8)).resize((128, 128)),
+                dtype=np.float32,
+            ) / 255.0
         t = torch.from_numpy(arr).unsqueeze(0)
         meta = {"class_name": self._class_names[label], "source": str(path)}
         if self._aug is not None:

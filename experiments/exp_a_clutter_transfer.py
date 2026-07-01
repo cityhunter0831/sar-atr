@@ -28,7 +28,7 @@ from PIL import Image
 from torch import Tensor
 from torch.utils.data import ConcatDataset, Dataset
 
-from augmentation.boundary_blend import clutter_transfer
+from augmentation.boundary_blend import clutter_transfer, compute_ssim
 from core.interfaces import EvalResult, SARDataset, SARSample, TrainConfig
 from core.mock_data import MockSARDataset
 from core.models import get_model
@@ -249,6 +249,52 @@ CONDITIONS: list[Condition] = ["MSTAROR", "TrainOR+TestCT", "TrainCT+TestCT", "T
 MODEL_NAMES = ["smpl", "resnet18"]
 
 
+def run_boundary_ssim_analysis(
+    n_samples: int = 20,
+    seed: int = 0,
+    save_dir: Path = RESULTS_DIR,
+) -> dict:
+    """
+    우리 팀 개선 #1: clutter transfer 경계 아티팩트를 SSIM으로 정량화.
+    원본 chip vs feather_blend 결과의 SSIM을 측정해 경계 품질 검증.
+    """
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    if not _data_available():
+        print("[SSIM] Real data not available — skipping.")
+        return {}
+
+    bg_dir = DATA_ROOT / "clutter_bg"
+    if not bg_dir.exists():
+        print(f"[SSIM] No clutter_bg dir at {bg_dir} — skipping.")
+        return {}
+
+    orig_ds = MSTARImageFolder(DATA_ROOT / "Original MSTAR Images", TABLE4_CLASSES)
+    bg_pool = ClutterBgPool(bg_dir, seed=seed)
+
+    import random as _rng
+    rng = _rng.Random(seed)
+    indices = rng.sample(range(len(orig_ds)), min(n_samples, len(orig_ds)))
+
+    ssim_scores = []
+    for i in indices:
+        sample = orig_ds[i]
+        bg = bg_pool.sample()
+        blended = clutter_transfer(sample.image, bg, method="feather")
+        score = compute_ssim(sample.image, blended)
+        ssim_scores.append(score)
+
+    mean_ssim = float(np.mean(ssim_scores)) if ssim_scores else 0.0
+    std_ssim  = float(np.std(ssim_scores))  if ssim_scores else 0.0
+    print(f"[SSIM] Boundary SSIM (original vs feather-blended): {mean_ssim:.4f} ± {std_ssim:.4f}  (n={len(ssim_scores)})")
+
+    result = {"mean_ssim": mean_ssim, "std_ssim": std_ssim, "n": len(ssim_scores)}
+    import json as _json
+    with open(save_dir / "boundary_ssim.json", "w") as f:
+        _json.dump(result, f, indent=2)
+    return result
+
+
 def run_all(epochs: int = 60, save_dir: Path = RESULTS_DIR) -> dict:
     """
     Run 4 conditions × 2 models × 3 seeds and return aggregated results.
@@ -308,5 +354,9 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=60)
+    parser.add_argument("--ssim", action="store_true", help="SSIM 경계 아티팩트 분석만 실행")
     args = parser.parse_args()
-    run_all(epochs=args.epochs)
+    if args.ssim:
+        run_boundary_ssim_analysis()
+    else:
+        run_all(epochs=args.epochs)
