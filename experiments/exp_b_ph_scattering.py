@@ -204,16 +204,42 @@ def run(
         for cls, files in files_by_class.items():
             print(f"  {cls}: {len(files)} files")
 
-        # 80/20 train/test split
+        # Cross-elevation split: 논문 Table 3 프로토콜
+        # 파일 확장자 = 앙각 코드 (.017 → 17°, .015 → 15°, .026 → 26°)
+        # 가장 많은 두 앙각을 train/test로 분리 → 도메인 갭 재현
+        from collections import Counter
+
+        def _elev(p: Path) -> str:
+            ext = p.suffix.lstrip(".")
+            return ext if ext.isdigit() else "unknown"
+
+        elev_counter: Counter = Counter(
+            _elev(p)
+            for files in files_by_class.values()
+            for p in files
+            if _elev(p) != "unknown"
+        )
+        top2 = [e for e, _ in elev_counter.most_common(2)]
+
         train_files: dict[str, list[Path]] = {}
         test_files:  dict[str, list[Path]] = {}
-        rng = random.Random(seed)
-        for cls, files in files_by_class.items():
-            shuffled = files[:]
-            rng.shuffle(shuffled)
-            n_train = max(1, int(len(shuffled) * 0.8))
-            train_files[cls] = shuffled[:n_train]
-            test_files[cls]  = shuffled[n_train:]
+
+        if len(top2) >= 2:
+            train_elev, test_elev = top2[0], top2[1]
+            print(f"  Cross-elevation split: train={train_elev}°, test={test_elev}°")
+            for cls, files in files_by_class.items():
+                train_files[cls] = [p for p in files if _elev(p) == train_elev]
+                test_files[cls]  = [p for p in files if _elev(p) == test_elev]
+        else:
+            # 앙각이 1종류뿐이면 80/20 랜덤 폴백
+            print(f"  Single elevation ({top2[0] if top2 else '?'}°) — falling back to 80/20 split.")
+            rng = random.Random(seed)
+            for cls, files in files_by_class.items():
+                shuffled = files[:]
+                rng.shuffle(shuffled)
+                n_train = max(1, int(len(shuffled) * 0.8))
+                train_files[cls] = shuffled[:n_train]
+                test_files[cls]  = shuffled[n_train:]
 
         base_ds = MSTARRawDataset(train_files, CLASSES)
         aug_ds  = PHAugmentedDataset(train_files, CLASSES, n_alphas=n_interp, seed=seed)

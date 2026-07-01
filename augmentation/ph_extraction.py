@@ -154,8 +154,8 @@ def interpolate_phase_history(
     if apply_window:
         from scipy.signal.windows import taylor
         h, w = img_a.shape
-        win_h = taylor(h, nbar=4, sll=-35, norm=False).astype(np.float32)
-        win_w = taylor(w, nbar=4, sll=-35, norm=False).astype(np.float32)
+        win_h = taylor(h, nbar=4, sll=35, norm=False).astype(np.float32)
+        win_w = taylor(w, nbar=4, sll=35, norm=False).astype(np.float32)
         window_2d = np.outer(win_h, win_w)
         img_a = img_a * window_2d
         img_b = img_b * window_2d
