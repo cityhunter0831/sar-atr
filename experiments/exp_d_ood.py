@@ -240,6 +240,7 @@ def run(
     save_dir: Path = RESULTS_DIR,
 ) -> list[dict]:
     save_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
     all_results = []
 
     for j in j_list:
