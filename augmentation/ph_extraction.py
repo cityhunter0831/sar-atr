@@ -64,8 +64,10 @@ def _header_byte_length(path: Path) -> int:
     hlen_m = re.search(rb"PhoenixHeaderLength=\s*(\d+)", peek)
     sig_m  = re.search(rb"PhoenixSigSize=\s*(\d+)", peek)
 
-    if hlen_m and sig_m:
-        return int(hlen_m.group(1)) + int(sig_m.group(1))
+    if hlen_m:
+        # PhoenixSigSize는 이 포맷(ver01.05)에서 파일 전체 크기를 의미하므로
+        # 오프셋은 ASCII 헤더 길이(PhoenixHeaderLength)만 사용
+        return int(hlen_m.group(1))
 
     # 폴백: 파일 전체에서 종결자 탐색
     with open(path, "rb") as f:
@@ -170,11 +172,17 @@ def interpolate_phase_history(
     return np.abs(img_interp).astype(np.float32)
 
 
-def amplitude_to_tensor(amp: np.ndarray) -> Tensor:
-    """Normalize amplitude image to [0,1] float32 Tensor [1, H, W]."""
+def amplitude_to_tensor(amp: np.ndarray, target_size: int = 128) -> Tensor:
+    """Normalize amplitude image to [0,1] float32 Tensor [1, H, W].
+    Mixed Targets 이미지는 158×158 등 다양한 크기 → target_size×target_size로 리사이즈.
+    """
+    import torch.nn.functional as F
     a = amp.astype(np.float32)
     a = a / (a.max() + 1e-8)
-    return torch.from_numpy(a).unsqueeze(0)
+    t = torch.from_numpy(a).unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+    if a.shape[0] != target_size or a.shape[1] != target_size:
+        t = F.interpolate(t, size=(target_size, target_size), mode="bilinear", align_corners=False)
+    return t.squeeze(0)  # [1, H, W]
 
 
 # ─── Phase history analysis ───────────────────────────────────────────────────
