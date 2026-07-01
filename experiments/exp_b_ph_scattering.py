@@ -50,20 +50,31 @@ CLASSES = ["2S1", "BRDM_2", "BTR_60", "D7", "T62", "ZIL131", "ZSU_23_4"]
 
 # ─── MSTAR raw file dataset ───────────────────────────────────────────────────
 
+def _has_phoenix_header(path: Path) -> bool:
+    """파일 앞 4KB만 읽어 Phoenix 헤더 존재 여부를 빠르게 확인."""
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(4096)
+        return b"EndofPhoenixHeader" in chunk
+    except Exception:
+        return False
+
+
 def _collect_raw_files(root: Path, classes: list[str]) -> dict[str, list[Path]]:
-    """Mixed Targets 디렉토리에서 클래스별 raw 파일 목록 수집."""
+    """Mixed Targets 디렉토리에서 클래스별 raw 파일 목록 수집.
+    Phoenix 헤더가 없는 파일은 제외해 zeros 학습 방지."""
     result: dict[str, list[Path]] = {}
     for cls in classes:
-        files: list[Path] = []
+        candidates: list[Path] = []
         for p in root.rglob(f"*{cls}*/*"):
             if p.is_file() and p.suffix.lstrip(".").isdigit() and len(p.suffix) >= 3:
-                files.append(p)
-        if not files:
-            # COL/SCENE 중간 폴더 구조 탐색
+                candidates.append(p)
+        if not candidates:
             for p in root.rglob("*"):
                 if p.is_file() and cls.lower() in str(p).lower():
                     if p.suffix.lstrip(".").isdigit():
-                        files.append(p)
+                        candidates.append(p)
+        files = [p for p in candidates if _has_phoenix_header(p)]
         result[cls] = files
     return result
 

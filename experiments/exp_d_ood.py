@@ -53,6 +53,16 @@ HOLDOUT_CONFIGS: dict[int, list[str]] = {
 
 # ─── Dataset helpers ──────────────────────────────────────────────────────────
 
+def _has_phoenix_header(path: Path) -> bool:
+    """파일 앞 4KB만 읽어 Phoenix 헤더 존재 여부 확인."""
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(4096)
+        return b"EndofPhoenixHeader" in chunk
+    except Exception:
+        return False
+
+
 class FolderDataset(SARDataset):
     """Generic image folder dataset compatible with SARDataset interface."""
 
@@ -68,7 +78,12 @@ class FolderDataset(SARDataset):
             for idx, cls in enumerate(class_names):
                 # 직접 경로(Targets) 또는 COL/SCENE 중간 경로(Mixed) 모두 지원
                 for p in root.rglob(f"{cls}/*"):
-                    if p.is_file():
+                    if not p.is_file():
+                        continue
+                    # 이미지 파일이거나 Phoenix 헤더가 있는 raw 파일만 포함
+                    if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif"}:
+                        self._samples.append((p, idx))
+                    elif _has_phoenix_header(p):
                         self._samples.append((p, idx))
 
     def __len__(self) -> int:
@@ -80,14 +95,17 @@ class FolderDataset(SARDataset):
             img = Image.open(path).convert("L").resize((128, 128))
             arr = np.array(img, dtype=np.float32) / 255.0
         except Exception:
-            from augmentation.ph_extraction import read_mstar_raw
-            import PIL.Image as _PILImage
-            raw = read_mstar_raw(path)
-            arr = (raw / (raw.max() + 1e-8)).astype(np.float32)
-            arr = np.array(
-                _PILImage.fromarray((arr * 255).astype(np.uint8)).resize((128, 128)),
-                dtype=np.float32,
-            ) / 255.0
+            try:
+                from augmentation.ph_extraction import read_mstar_raw
+                import PIL.Image as _PILImage
+                raw = read_mstar_raw(path)
+                arr = (raw / (raw.max() + 1e-8)).astype(np.float32)
+                arr = np.array(
+                    _PILImage.fromarray((arr * 255).astype(np.uint8)).resize((128, 128)),
+                    dtype=np.float32,
+                ) / 255.0
+            except Exception:
+                arr = np.zeros((128, 128), dtype=np.float32)
         t = torch.from_numpy(arr).unsqueeze(0)
         meta = {"class_name": self._class_names[label], "source": str(path)}
         if self._aug is not None:
