@@ -58,7 +58,7 @@ def _has_phoenix_header(path: Path) -> bool:
     try:
         with open(path, "rb") as f:
             chunk = f.read(4096)
-        return b"EndofPhoenixHeader" in chunk
+        return b"PhoenixHeaderVer" in chunk
     except Exception:
         return False
 

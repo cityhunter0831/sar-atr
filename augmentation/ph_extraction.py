@@ -28,26 +28,43 @@ from torch import Tensor
 def read_mstar_header(path: Path) -> dict[str, str]:
     """Parse the Phoenix ASCII header from a raw MSTAR file."""
     header: dict[str, str] = {}
+    offset = _header_byte_length(path)
     with open(path, "rb") as f:
-        for raw_line in f:
-            line = raw_line.decode("ascii", errors="replace").strip()
-            if line == "EndofPhoenixHeader":
-                break
-            if "=" in line:
-                k, _, v = line.partition("=")
-                header[k.strip()] = v.strip()
+        text = f.read(offset).decode("ascii", errors="replace")
+    for line in text.splitlines():
+        line = line.strip().strip("[]")
+        if line.lower().startswith("endofphoenixheader"):
+            break
+        if "=" in line:
+            k, _, v = line.partition("=")
+            header[k.strip()] = v.strip()
     return header
 
 
 def _header_byte_length(path: Path) -> int:
-    """Find byte offset where binary data starts (after EndofPhoenixHeader\\n)."""
-    marker = b"EndofPhoenixHeader\n"
+    """Return byte offset where binary payload starts.
+
+    실제 MSTAR Mixed Targets 파일은 헤더 안에 PhoenixSigSize(~24KB)가 포함되어
+    있어 EndofPhoenixHeader 마커가 4KB 이후에 있음. PhoenixHeaderLength 필드를
+    직접 파싱해 오프셋을 구하는 방식으로 교체.
+    """
+    import re
+    with open(path, "rb") as f:
+        # 헤더 메타 필드는 항상 첫 256바이트 이내에 존재
+        peek = f.read(256)
+
+    m = re.search(rb"PhoenixHeaderLength=\s*(\d+)", peek)
+    if m:
+        return int(m.group(1))
+
+    # 폴백: 파일 전체에서 종결자 탐색 (여러 변형 대응)
     with open(path, "rb") as f:
         data = f.read()
-    idx = data.find(marker)
-    if idx == -1:
-        raise ValueError(f"MSTAR header terminator not found in {path}")
-    return idx + len(marker)
+    for marker in (b"[EndofPhoenixHeader]", b"EndofPhoenixHeader\n", b"EndofPhoenixHeader\r\n"):
+        idx = data.find(marker)
+        if idx != -1:
+            return idx + len(marker)
+    raise ValueError(f"MSTAR header terminator not found in {path}")
 
 
 def read_mstar_raw(path: str | Path) -> np.ndarray:

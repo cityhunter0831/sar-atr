@@ -8,7 +8,7 @@ check_dirs = [
 ]
 
 CRLF = b"\r\n"
-PHOENIX = b"EndofPhoenixHeader"
+PHOENIX = b"PhoenixHeaderVer"
 
 for d in check_dirs:
     if not d.exists():
