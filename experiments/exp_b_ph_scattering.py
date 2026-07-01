@@ -103,6 +103,8 @@ class PHAugmentedDataset(SARDataset):
 
     각 클래스에서 이미지 pair를 구성하고, n_alphas개의 alpha 값으로
     합성 이미지를 생성해서 원본에 추가합니다.
+
+    lazy loading: __init__에서 경로/메타 튜플만 저장, I/O는 __getitem__에서 수행.
     """
 
     def __init__(
@@ -113,9 +115,9 @@ class PHAugmentedDataset(SARDataset):
         seed: int = 0,
     ):
         self._class_names = class_names
-        self._samples: list[tuple[np.ndarray, int]] = []
+        # (kind, data, label) — kind: "original" | "synth"
+        self._samples: list[tuple[str, object, int]] = []
 
-        rng = random.Random(seed)
         alphas = [i / (n_alphas + 1) for i in range(1, n_alphas + 1)]
 
         for idx, cls in enumerate(class_names):
@@ -123,34 +125,35 @@ class PHAugmentedDataset(SARDataset):
             if not files:
                 continue
 
-            # 원본 이미지 추가
             for p in files:
-                try:
-                    amp = read_mstar_raw(p)
-                    self._samples.append((amp, idx))
-                except Exception:
-                    pass
+                self._samples.append(("original", p, idx))
 
-            # PH 보간 합성 이미지 추가
             if len(files) >= 2:
-                pairs = list(zip(files, files[1:] + files[:1]))  # 순환 pair
+                pairs = list(zip(files, files[1:] + files[:1]))
                 for p_a, p_b in pairs:
-                    try:
-                        c_a = read_mstar_complex(p_a)
-                        c_b = read_mstar_complex(p_b)
-                        for alpha in alphas:
-                            synth = interpolate_phase_history(c_a, c_b, alpha)
-                            self._samples.append((synth, idx))
-                    except Exception:
-                        pass
+                    for alpha in alphas:
+                        self._samples.append(("synth", (p_a, p_b, alpha), idx))
 
     def __len__(self) -> int:
         return len(self._samples)
 
     def __getitem__(self, idx: int) -> SARSample:
-        amp, label = self._samples[idx]
-        t = amplitude_to_tensor(amp)
-        return SARSample(image=t, label=label, meta={"class_name": self._class_names[label]})
+        kind, data, label = self._samples[idx]
+        if kind == "original":
+            try:
+                amp = read_mstar_raw(data)
+            except Exception:
+                amp = np.zeros((128, 128), dtype=np.float32)
+        else:
+            p_a, p_b, alpha = data
+            try:
+                amp = interpolate_phase_history(
+                    read_mstar_complex(p_a), read_mstar_complex(p_b), alpha
+                )
+            except Exception:
+                amp = np.zeros((128, 128), dtype=np.float32)
+        return SARSample(image=amplitude_to_tensor(amp), label=label,
+                         meta={"class_name": self._class_names[label]})
 
     @property
     def class_names(self) -> list[str]:
