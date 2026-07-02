@@ -44,7 +44,13 @@ from core.train import train_model
 from gradcam.cam import GradCAM
 from gradcam.scatter_overlap import centers_to_mask, iou as compute_iou
 
-MSTAR_RAW_DIR = Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD2")
+# 표준 MSTAR SOC(train 17° / test 15°) 재현을 위해 두 디스크를 모두 로드.
+# 15°는 CD1에, 17°는 CD2에 있으므로 둘 다 필요. (진단 교차표로 확인됨)
+MSTAR_RAW_DIRS = [
+    Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD1"),
+    Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD2"),
+]
+MSTAR_RAW_DIR = MSTAR_RAW_DIRS[1]  # 하위호환 (일부 코드에서 참조)
 RESULTS_DIR = Path("results/exp_b")
 CLASSES = ["2S1", "BRDM_2", "BTR_60", "D7", "T62", "ZIL131", "ZSU_23_4"]
 
@@ -61,22 +67,29 @@ def _has_phoenix_header(path: Path) -> bool:
         return False
 
 
-def _collect_raw_files(root: Path, classes: list[str]) -> dict[str, list[Path]]:
-    """Mixed Targets 디렉토리에서 클래스별 raw 파일 목록 수집.
-    Phoenix 헤더가 없는 파일은 제외해 zeros 학습 방지."""
-    result: dict[str, list[Path]] = {}
-    for cls in classes:
-        candidates: list[Path] = []
-        for p in root.rglob(f"*{cls}*/*"):
-            if p.is_file() and p.suffix.lstrip(".").isdigit() and len(p.suffix) >= 3:
-                candidates.append(p)
-        if not candidates:
-            for p in root.rglob("*"):
-                if p.is_file() and cls.lower() in str(p).lower():
-                    if p.suffix.lstrip(".").isdigit():
-                        candidates.append(p)
-        files = [p for p in candidates if _has_phoenix_header(p)]
-        result[cls] = files
+def _collect_raw_files(
+    roots: "Path | list[Path]", classes: list[str]
+) -> dict[str, list[Path]]:
+    """Mixed Targets 디렉토리(들)에서 클래스별 raw 파일 목록 수집.
+    여러 디스크(CD1+CD2)를 합산 지원. Phoenix 헤더 없는 파일은 제외."""
+    if isinstance(roots, Path):
+        roots = [roots]
+
+    result: dict[str, list[Path]] = {c: [] for c in classes}
+    for root in roots:
+        if not root.exists():
+            continue
+        for cls in classes:
+            candidates: list[Path] = []
+            for p in root.rglob(f"*{cls}*/*"):
+                if p.is_file() and p.suffix.lstrip(".").isdigit() and len(p.suffix) >= 3:
+                    candidates.append(p)
+            if not candidates:
+                for p in root.rglob("*"):
+                    if p.is_file() and cls.lower() in str(p).lower():
+                        if p.suffix.lstrip(".").isdigit():
+                            candidates.append(p)
+            result[cls].extend(p for p in candidates if _has_phoenix_header(p))
     return result
 
 
@@ -274,7 +287,7 @@ class PHAugmentedDataset(SARDataset):
 # ─── Main runners ─────────────────────────────────────────────────────────────
 
 def _data_available() -> bool:
-    return MSTAR_RAW_DIR.exists() and any(MSTAR_RAW_DIR.rglob("*"))
+    return any(d.exists() and any(d.rglob("*")) for d in MSTAR_RAW_DIRS)
 
 
 def run(
@@ -293,14 +306,14 @@ def run(
 
     if use_mock or not _data_available():
         if not use_mock:
-            print(f"[Exp B] MSTAR Mixed Targets not found at {MSTAR_RAW_DIR} — using mock data.")
+            print(f"[Exp B] MSTAR Mixed Targets not found at {MSTAR_RAW_DIRS} — using mock data.")
         n = 60 * num_classes
         base_ds = MockSARDataset(n=n, num_classes=num_classes, seed=seed)
         aug_ds  = MockSARDataset(n=n * (n_interp + 1), num_classes=num_classes, seed=seed + 1)
         test_ds = MockSARDataset(n=20 * num_classes, num_classes=num_classes, seed=seed + 2)
     else:
-        print(f"[Exp B] Loading MSTAR Mixed Targets from {MSTAR_RAW_DIR} ...")
-        files_by_class = _collect_raw_files(MSTAR_RAW_DIR, CLASSES)
+        print(f"[Exp B] Loading MSTAR Mixed Targets from CD1+CD2 ...")
+        files_by_class = _collect_raw_files(MSTAR_RAW_DIRS, CLASSES)
         for cls, files in files_by_class.items():
             print(f"  {cls}: {len(files)} files")
 
@@ -367,7 +380,7 @@ def run_gradcam_analysis(
 
     raw_files: list[Path] = []
     if _data_available():
-        files_by_class = _collect_raw_files(MSTAR_RAW_DIR, CLASSES)
+        files_by_class = _collect_raw_files(MSTAR_RAW_DIRS, CLASSES)
         for files in files_by_class.values():
             raw_files.extend(files)
     if not raw_files:

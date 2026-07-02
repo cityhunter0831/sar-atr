@@ -142,9 +142,11 @@ SAMPLE 클래스 10개 (소문자): `2s1 bmp2 btr70 m1 m2 m35 m60 m548 t72 zsu23
 
 ## 알려진 설계 결정 및 주의사항
 
+**Exp B 데이터 = CD1 + CD2 둘 다 로드** (`MSTAR_RAW_DIRS`). 표준 MSTAR SOC(train 17° / test 15°) 재현을 위해 필수 — **15°는 CD1에만, 17°는 CD2에만** 있음. 7개 클래스 모두 두 부각을 다 가짐 (진단 교차표로 확인).
+
 **Exp B train/test split:** `_split_train_test()` 사용 — **헤더 부각 기반 cross-depression split**.
 헤더 `DesiredDepression` 필드에서 부각을 읽어 전역 상위 2개 부각을 train/test로 분리 (`_depression_angle()`).
-- **CD2 (주 데이터)**: 부각 17° (2347개) / 30° (1402개) → train=17°, test=30°.
+- CD1+CD2 합산 시 7개 클래스 기준 17°(2049) / 15°(1838)가 상위 2개 → **train=17°, test=15°** (표준 SOC).
 - 특정 클래스가 두 부각 중 하나만 가지면 그 클래스만 클래스 내 랜덤 80/20, 부각을 아예 못 읽으면 전체 stratified 폴백 (0% 방지).
 - 같은 부각 내 랜덤 분할 시 99%+ 정확도 (trivial) — 논문 재현 불가.
 - ⚠️ **파일 확장자로 앙각 판별 금지** (Mixed Targets 확장자 `.001`/`.015`는 앙각이 아니라 일련번호; `.015` 파일의 실제 부각이 16°인 경우도 있음).
