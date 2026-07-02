@@ -144,6 +144,25 @@ class SARShipDataset(SARDataset):
         return ["sarship"]
 
 
+class _SubsetWithNames(SARDataset):
+    """torch random_split이 반환하는 Subset은 class_names가 없어서
+    Mahalanobis(train_ds.class_names 참조)에서 터짐. 이를 노출하는 얇은 래퍼."""
+
+    def __init__(self, subset, class_names: list[str]):
+        self._subset = subset
+        self._class_names = class_names
+
+    def __len__(self) -> int:
+        return len(self._subset)
+
+    def __getitem__(self, idx: int) -> SARSample:
+        return self._subset[idx]
+
+    @property
+    def class_names(self) -> list[str]:
+        return self._class_names
+
+
 # ─── Data loading ─────────────────────────────────────────────────────────────
 
 def _data_available() -> bool:
@@ -179,8 +198,11 @@ def load_id_holdout(
     n_train = int(len(full_known) * 0.8)
     n_test = len(full_known) - n_train
     import torch
-    train_ds, test_id_ds = random_split(full_known, [n_train, n_test],
-                                        generator=torch.Generator().manual_seed(0))
+    train_sub, test_sub = random_split(full_known, [n_train, n_test],
+                                       generator=torch.Generator().manual_seed(0))
+    # Subset은 class_names가 없음 → Mahalanobis용으로 래핑
+    train_ds = _SubsetWithNames(train_sub, known)
+    test_id_ds = _SubsetWithNames(test_sub, known)
     test_holdout_ds = FolderDataset(all_roots, holdout)
 
     sar_ship = SARShipDataset(SARSHIP_DIR)
