@@ -142,11 +142,12 @@ SAMPLE 클래스 10개 (소문자): `2s1 bmp2 btr70 m1 m2 m35 m60 m548 t72 zsu23
 
 ## 알려진 설계 결정 및 주의사항
 
-**Exp B train/test split:** `_split_train_test()` 사용 — **헤더 부각 기반 cross-elevation split**.
-헤더에서 부각을 읽어 상위 2개 부각을 train/test로 분리 (`_depression_angle()`).
-어떤 클래스라도 한쪽이 비면 stratified 80/20으로 자동 폴백 (0% 정확도 방지).
-같은 앙각 내 랜덤 분할 시 99%+ 정확도 (trivial) — 논문 재현 불가.
-⚠️ 파일 확장자로 앙각을 판별하면 안 됨 (Mixed Targets 확장자는 일련번호).
+**Exp B train/test split:** `_split_train_test()` 사용 — **헤더 부각 기반 cross-depression split**.
+헤더 `DesiredDepression` 필드에서 부각을 읽어 전역 상위 2개 부각을 train/test로 분리 (`_depression_angle()`).
+- **CD2 (주 데이터)**: 부각 17° (2347개) / 30° (1402개) → train=17°, test=30°.
+- 특정 클래스가 두 부각 중 하나만 가지면 그 클래스만 클래스 내 랜덤 80/20, 부각을 아예 못 읽으면 전체 stratified 폴백 (0% 방지).
+- 같은 부각 내 랜덤 분할 시 99%+ 정확도 (trivial) — 논문 재현 불가.
+- ⚠️ **파일 확장자로 앙각 판별 금지** (Mixed Targets 확장자 `.001`/`.015`는 앙각이 아니라 일련번호; `.015` 파일의 실제 부각이 16°인 경우도 있음).
 
 **Taylor 윈도우:** `scipy.signal.windows.taylor(sll=35)` — **양수** 값 사용.
 `sll=-35` 시 `arccosh` 정의역 위반 → NaN → 합성 이미지 전부 zeros.

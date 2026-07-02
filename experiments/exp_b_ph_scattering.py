@@ -127,43 +127,56 @@ def _stratified_split(
 def _split_train_test(
     files_by_class: dict[str, list[Path]], seed: int
 ) -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
-    """논문 Table 3 프로토콜: cross-elevation split 우선, 불가 시 stratified 폴백.
+    """논문 Table 3 프로토콜: cross-depression split (헤더 `DesiredDepression` 기반).
 
-    부각을 헤더에서 읽어 상위 2개 부각을 train/test로 분리.
-    단, 그 분리가 어떤 클래스에서 train 또는 test를 비우면 → stratified로 폴백.
+    전역 상위 2개 부각을 train/test 부각으로 선택 (예: CD2 → 17°/30°).
+    클래스별로 두 부각 파일을 각각 train/test에 배치.
+    특정 클래스가 두 부각 중 하나만 가지면 → 그 클래스만 클래스 내 랜덤 80/20
+    (전체 폴백 대신 나머지 클래스의 cross-depression 이점 유지).
+    부각을 아예 못 읽으면 전체 stratified 80/20 폴백.
     """
     from collections import Counter
 
-    dep_counter: Counter = Counter(
-        _depression_angle(p)
-        for files in files_by_class.values()
-        for p in files
-    )
-    dep_counter.pop("unknown", None)
+    # 파일당 부각 1회만 읽어 캐시 (중복 디스크 I/O 방지)
+    dep_of: dict[Path, str] = {}
+    for files in files_by_class.values():
+        for p in files:
+            dep_of[p] = _depression_angle(p)
+
+    dep_counter: Counter = Counter(d for d in dep_of.values() if d != "unknown")
     top2 = [d for d, _ in dep_counter.most_common(2)]
 
-    if len(top2) >= 2:
-        train_dep, test_dep = top2[0], top2[1]
-        train_files = {
-            cls: [p for p in files if _depression_angle(p) == train_dep]
-            for cls, files in files_by_class.items()
-        }
-        test_files = {
-            cls: [p for p in files if _depression_angle(p) == test_dep]
-            for cls, files in files_by_class.items()
-        }
-        # 모든 클래스가 양쪽에 존재하는지 검증
-        ok = all(len(train_files[c]) > 0 for c in files_by_class) and \
-             all(len(test_files[c]) > 0 for c in files_by_class)
-        if ok:
-            print(f"  Cross-elevation split: train={train_dep}°, test={test_dep}°")
-            return train_files, test_files
-        print(f"  ⚠️  Cross-elevation split ({train_dep}°/{test_dep}°)이 일부 클래스를 "
-              f"비움 — stratified 80/20으로 폴백.")
-    else:
+    if len(top2) < 2:
         print("  ⚠️  헤더에서 2개 이상 부각을 못 찾음 — stratified 80/20 사용.")
+        return _stratified_split(files_by_class, seed)
 
-    return _stratified_split(files_by_class, seed)
+    train_dep, test_dep = top2[0], top2[1]
+    print(f"  Cross-depression split: train={train_dep}°, test={test_dep}°")
+
+    train_files: dict[str, list[Path]] = {}
+    test_files: dict[str, list[Path]] = {}
+    rng = random.Random(seed)
+
+    for cls, files in files_by_class.items():
+        tr = [p for p in files if dep_of[p] == train_dep]
+        te = [p for p in files if dep_of[p] == test_dep]
+        if tr and te:
+            train_files[cls] = tr
+            test_files[cls] = te
+        else:
+            # 이 클래스는 두 부각을 모두 갖지 않음 → 클래스 내 랜덤 80/20
+            print(f"    ⚠️  {cls}: {train_dep}°={len(tr)} {test_dep}°={len(te)} "
+                  f"— 클래스 내 랜덤 80/20 사용")
+            shuffled = files[:]
+            rng.shuffle(shuffled)
+            if len(shuffled) >= 2:
+                n_train = max(1, min(len(shuffled) - 1, int(len(shuffled) * 0.8)))
+            else:
+                n_train = len(shuffled)
+            train_files[cls] = shuffled[:n_train]
+            test_files[cls] = shuffled[n_train:]
+
+    return train_files, test_files
 
 
 class MSTARRawDataset(SARDataset):
