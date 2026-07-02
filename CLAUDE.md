@@ -1,345 +1,165 @@
-# CLAUDE.md — SAR-ATR 프로젝트 컨텍스트
+# CLAUDE.md
 
-> 이 파일은 Claude Code가 자동으로 읽습니다.
-> 모든 구현은 이 문서의 인터페이스·경로·버그 목록을 따르세요.
-
----
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## 프로젝트 개요
 
-Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Training Data
-Augmentation") 재현 및 개선 과제.
+Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Training Data Augmentation") 재현 및 개선 과제.
 
 **4개 실험:**
-- Exp A: 클러터 전이 (Table 4 재현) — gengzhe2015 데이터
-- Exp B: 위상 기록(PH)/산란점 추출 — MSTAR raw binary
-- Exp C: 대비 보정 + Optuna (Figure 1) — SAMPLE dataset
-- Exp D: OOD 탐지 — MSTAR 10클래스 + SAR-ship OE
+- Exp A: 클러터 전이 Table 4 재현 — gengzhe2015 데이터
+- Exp B: PH 보간 증강 Table 3 재현 — MSTAR Mixed Targets raw binary
+- Exp C: 대비 보정 + Optuna Figure 1 재현 — SAMPLE dataset
+- Exp D: OOD 탐지 (ODIN vs Mahalanobis) — MSTAR 10클래스 + SAR-ship
+
+**우리 팀 개선 3가지:**
+1. SSIM 경계 아티팩트 정량화 (`run_boundary_ssim_analysis()` in exp_a)
+2. Adam 옵티마이저 비교
+3. Grad-CAM × 산란점 IoU 검증 (`run_gradcam_analysis()` in exp_b)
 
 ---
 
-## 디렉토리 구조
-
-```
-D:\workspace\software\sar-atr\          ← 프로젝트 루트 (이 파일 위치)
-├── core/
-│   ├── interfaces.py    ← SARSample, SARDataset, TrainConfig, EvalResult (변경 금지)
-│   ├── models.py        ← SMPL, get_resnet18(), get_model()
-│   ├── train.py         ← train_model()
-│   ├── evaluate.py      ← evaluate(), evaluate_ood()
-│   └── mock_data.py     ← MockSARDataset
-├── augmentation/
-│   ├── boundary_blend.py
-│   ├── contrast_balance.py
-│   └── ph_extraction.py
-├── experiments/
-│   ├── exp_a_clutter_transfer.py
-│   ├── exp_b_ph_scattering.py
-│   ├── exp_c_contrast_optuna.py
-│   └── exp_d_ood.py
-├── gradcam/             ← 아직 없음, 구현 필요
-├── notebooks/
-└── results/
-```
-
----
-
-## 데이터 경로
-
-### 로컬 (개발·디버깅용, mock 전용)
-```
-D:\workspace\software\sar-atr\data\     ← .gitignore에 포함
-```
-
-### Google Drive (실데이터 — Colab에서 마운트)
-```
-MyDrive/SAR_ATR_Project/data/
-├── clutter_gengzhe/                 ← Exp A
-│   ├── Original MSTAR Images/       (gengzhe2015 ZIP 해제)
-│   ├── Train_OR_Test_CT/
-│   ├── Train_CT_Test_CT/
-│   └── Train_CTx2_Test_CT/
-│
-├── sample/                          ← Exp C (SAMPLE dataset)
-│   └── png_images/
-│       ├── BMP2/
-│       │   ├── measured/
-│       │   └── synthetic/
-│       └── ...
-│
-├── mstar/                           ← Exp B + Exp D (SDMS 승인 후)
-│   ├── targets/                     (MSTAR Targets 패키지)
-│   │   ├── BMP2/
-│   │   │   ├── train/               El=15° raw binary 파일들 (.015 확장자)
-│   │   │   └── test/                El=17° raw binary 파일들 (.017 확장자)
-│   │   ├── BTR70/
-│   │   └── T72/
-│   └── mixed_targets/               (MSTAR/IU Mixed Targets 패키지)
-│       ├── 2S1/
-│       │   ├── train/
-│       │   └── test/
-│       ├── BRDM2/
-│       ├── BTR60/
-│       ├── D7/
-│       ├── T62/
-│       ├── ZIL131/
-│       └── ZSU23-4/
-│
-└── sarship/                         ← Exp D OE (Kaggle 다운로드)
-    └── images/                      PNG 파일들 (크기 무관)
-```
-
-### Colab에서 마운트하는 법
-```python
-from google.colab import drive
-drive.mount('/content/drive')
-DATA_ROOT = '/content/drive/MyDrive/SAR_ATR_Project/data'
-# 심볼릭 링크로 코드 경로와 연결
-import os, subprocess
-subprocess.run(['ln', '-sf', DATA_ROOT, '/content/repo/data'])
-```
-
----
-
-## 참조 레포 (~/refs/ 에 clone)
+## 실행 명령
 
 ```bash
-git clone https://github.com/jacobgil/pytorch-grad-cam       ~/refs/pytorch-grad-cam
-git clone https://github.com/kkirchheim/pytorch-ood           ~/refs/pytorch-ood
-git clone https://github.com/SENSE-Lab-OSU/mstar_data_aug     ~/refs/mstar_data_aug
-```
-
-| 참조 레포 | 참고할 파일 | 용도 |
-|---|---|---|
-| `~/refs/pytorch-grad-cam` | `pytorch_grad_cam/grad_cam.py` | Grad-CAM hook 구현 |
-| `~/refs/pytorch-ood` | `src/pytorch_ood/detector/odin.py`, `mahalanobis.py` | OOD 탐지기 로직 검증 |
-| `~/refs/mstar_data_aug` | `*.m` 파일들 | MATLAB PH 추출 로직 → Python 번역 참고 |
-
----
-
-## 핵심 인터페이스 계약 (변경 금지)
-
-```python
-# core/interfaces.py 요약
-SARSample: image[1,H,W] float32, label:int, meta:dict
-SARDataset: __getitem__→SARSample, __len__, class_names
-Augmentation: (image:Tensor, meta:dict) → Tensor
-TrainConfig: model_name, num_classes, epochs=60, batch_size=128,
-             lr=1e-3, lr_decay_epoch=50, loss_type="lsm"|"at"
-EvalResult: accuracy, confusion_matrix, per_class_accuracy,
-            auroc=None, tnr_at_95tpr=None
-```
-
-모든 Dataset 클래스는 **반드시 SARDataset을 상속**해야 합니다.
-모델은 항상 `get_model(name, num_classes)` 를 통해 생성하세요.
-
----
-
-## 🔴 수정 필요한 버그 목록
-
-### BUG-1: Exp B 산란점 도메인 불일치 [치명]
-
-**파일:** `augmentation/ph_extraction.py`, `experiments/exp_b_ph_scattering.py`
-
-**문제:** `extract_scattering_centers()`가 FFT 주파수 도메인 좌표를 반환함.
-Grad-CAM은 공간(spatial) 도메인 → IoU 비교가 물리적으로 무의미.
-
-**수정:**
-1. `ph_extraction.py`에 `extract_spatial_scattering_centers(amplitude, k=5, min_distance=5)` 추가:
-   - `amplitude` 이미지(공간 도메인)에서 `scipy.ndimage.maximum_filter`로 local maxima 추출
-   - DC 제거 불필요 (FFT 아니므로), 단순히 밝기 상위 K개 픽셀 좌표 반환
-2. `exp_b_ph_scattering.py`의 `analyse_sample()`에서 `extract_scattering_centers` → `extract_spatial_scattering_centers`로 교체
-
-```python
-# 추가할 함수 skeleton
-def extract_spatial_scattering_centers(
-    amplitude: np.ndarray, k: int = 5, min_distance: int = 5
-) -> list[tuple[float, float]]:
-    """공간 도메인 amplitude 이미지에서 직접 산란점(밝은 점) 추출."""
-    from scipy.ndimage import maximum_filter
-    local_max = maximum_filter(amplitude, size=min_distance * 2 + 1)
-    peaks_mask = (amplitude == local_max) & (amplitude > amplitude.mean())
-    ys, xs = np.where(peaks_mask)
-    vals = amplitude[ys, xs]
-    order = np.argsort(vals)[::-1][:k]
-    return [(float(ys[i]), float(xs[i])) for i in order]
-```
-
----
-
-### BUG-2: Exp D 데이터 누수 [치명]
-
-**파일:** `experiments/exp_d_ood.py`
-
-**문제:** `load_id_holdout()`의 real data 분기에서 `train_ds`와 `test_id_ds`가
-동일 폴더를 그대로 로드 → train/test 중복.
-
-**수정:** `exp_a_clutter_transfer.py`의 `_split_dataset()`과 `MSTARImageFolder`를
-import해서 80/20 분리 적용:
-
-```python
-from experiments.exp_a_clutter_transfer import _split_dataset, MSTARImageFolder
-
-# load_id_holdout() real data 분기 수정
-full_ds = MSTARImageFolder(MSTAR_DIR, known)
-train_ds, test_id_ds = _split_dataset(full_ds, train_ratio=0.8, seed=seed)
-```
-
----
-
-### BUG-3: Exp A gengzhe2015 split 로직 오류 [중간]
-
-**파일:** `experiments/exp_a_clutter_transfer.py`
-
-**문제:** 현재 코드는 전체 데이터를 랜덤 80/20 분할함.
-gengzhe2015 레포 README에 따르면 El=15°(train) / El=17°(test)로 이미 분리된 이미지.
-
-**수정:**
-- `_split_dataset()` 호출 제거
-- 각 ZIP 폴더 내에서 `train/` 과 `test/` (또는 El=15° / El=17°) 서브폴더를 직접 로드
-- ZIP 해제 후 실제 폴더 구조 확인 필수: `ls data/clutter_gengzhe/` 로 확인 후 경로 수정
-
----
-
-### BUG-4: Exp C SAMPLE 로더 없음 [중간]
-
-**파일:** `experiments/exp_c_contrast_optuna.py`
-
-**문제:** MSTAR El=17°/30° 전용 로더만 있음. SAMPLE은 `png_images/<class>/measured/` +
-`synthetic/` 구조.
-
-**수정:** `SampleDataset` 클래스 추가:
-
-```python
-class SampleDataset(SARDataset):
-    """
-    SAMPLE dataset loader.
-    구조: data/sample/png_images/<class_name>/measured/*.png
-          data/sample/png_images/<class_name>/synthetic/*.png
-    split: "measured" | "synthetic"
-    """
-    def __init__(self, root: Path, split: str, class_names: list[str]):
-        # split = "measured" or "synthetic"
-        ...
-```
-
-`load_el17_el30()` 대신 `load_sample()` 함수 추가:
-```python
-def load_sample(class_names=SAMPLE_CLASSES):
-    """Returns (train_synthetic, test_measured)"""
-    train = SampleDataset(DATA_ROOT / "sample/png_images", "synthetic", class_names)
-    test  = SampleDataset(DATA_ROOT / "sample/png_images", "measured",  class_names)
-    return train, test
-```
-
-MSTAR El=17°/30° 실험은 `run_el_ablation()` 함수로 분리해서 보조 ablation으로 유지.
-
----
-
-### BUG-5: contrast_balance.py _AugmentedDataset 미상속 [경미]
-
-**파일:** `augmentation/contrast_balance.py`
-
-**문제:** `make_optuna_objective()` 내 `_AugmentedDataset`이 `SARDataset` 미상속.
-
-**수정:**
-```python
-from core.interfaces import SARDataset
-class _AugmentedDataset(SARDataset):   # SARDataset 상속 추가
-    ...
-```
-
----
-
-### BUG-6: models.py get_features 바인딩 불안정 [경미]
-
-**파일:** `core/models.py`
-
-**문제:** `get_resnet18()`에서 `types.MethodType`으로 `get_features`를 인스턴스에
-직접 바인딩 → `torch.save()` 시 pickle 실패 가능.
-
-**수정:** ResNet18 wrapper 클래스로 대체:
-```python
-class ResNet18SAR(nn.Module):
-    def __init__(self, num_classes: int = 10):
-        super().__init__()
-        base = tv_models.resnet18(weights=None)
-        base.conv1 = nn.Conv2d(1, 64, 7, 2, 3, bias=False)
-        base.fc = nn.Linear(base.fc.in_features, num_classes)
-        self._base = base
-
-    def forward(self, x):
-        return self._base(x)
-
-    def get_features(self, x):
-        b = self._base
-        x = b.relu(b.bn1(b.conv1(x)))
-        x = b.maxpool(x)
-        x = b.layer1(x); x = b.layer2(x)
-        x = b.layer3(x); x = b.layer4(x)
-        return b.avgpool(x).flatten(1)
-```
-
----
-
-## 추가 구현 필요 항목
-
-### IMPL-1: 시각화 함수 (core/evaluate.py에 추가)
-
-```python
-def plot_confusion_matrix(result: EvalResult, class_names: list[str],
-                           title: str = "", save_path=None) -> None:
-    """seaborn heatmap, annotated, saved to PNG."""
-
-def plot_accuracy_bar(results_dict: dict, title: str = "",
-                       save_path=None) -> None:
-    """조건별 정확도 막대그래프 + 오차막대 (mean ± std)."""
-```
-
-의존성: `pip install seaborn matplotlib`
-
-### IMPL-2: gradcam/ 모듈 신설
-
-```
-gradcam/
-├── __init__.py
-├── cam.py          ← GradCAM 클래스 (~/refs/pytorch-grad-cam 참고)
-└── scatter_overlap.py  ← IoU 계산, 시각화
-```
-
-`~/refs/pytorch-grad-cam/pytorch_grad_cam/grad_cam.py` 읽고 우리 모델 인터페이스에 맞게 구현.
-
-### IMPL-3: notebooks/visualize.ipynb 생성
-
-metrics.json → confusion matrix PNG, 정확도 비교표 자동 생성 노트북.
-
----
-
-## 테스트 방법 (실데이터 없이)
-
-```bash
-cd D:\workspace\software\sar-atr
-
-# 파이프라인 전체 smoke test
+# 전체 파이프라인 smoke test (실데이터 없이)
 python -c "
 from core.mock_data import MockSARDataset
 from core.models import get_model
 from core.train import train_model
 from core.interfaces import TrainConfig
-
 ds = MockSARDataset(n=50, num_classes=5)
 model = get_model('smpl', 5)
 cfg = TrainConfig('smpl', 5, epochs=2)
 model, result = train_model(model, ds, ds, cfg)
 print('OK:', result.accuracy)
 "
+
+# Exp B smoke test (mock 모드)
+python -c "from experiments.exp_b_ph_scattering import run; print(run(use_mock=True, epochs=2, n_interp=2))"
+
+# Exp A 직접 실행
+python experiments/exp_a_clutter_transfer.py --mock
+python experiments/exp_a_clutter_transfer.py --ssim  # SSIM 분석
+
+# Exp B 직접 실행
+python experiments/exp_b_ph_scattering.py --mock
+python experiments/exp_b_ph_scattering.py --gradcam --checkpoint results/exp_b/model.pth
+
+# Exp C 직접 실행
+python experiments/exp_c_contrast_optuna.py --mock
+
+# Exp D 직접 실행
+python experiments/exp_d_ood.py --model smpl
+
+# MSTAR 파일 포맷 진단
+python scripts/diag_mstar_format.py
 ```
+
+---
+
+## 핵심 인터페이스 계약 (변경 금지)
+
+`core/interfaces.py` 에 정의된 타입들:
+
+```python
+SARSample: image[1,H,W] float32, label:int, meta:dict
+SARDataset: __getitem__→SARSample, __len__, class_names:list[str]
+TrainConfig: model_name, num_classes, epochs=60, batch_size=128,
+             lr=1e-3, lr_decay_epoch=50, loss_type="lsm"|"at"
+EvalResult: accuracy, confusion_matrix, per_class_accuracy,
+            auroc=None, tnr_at_95tpr=None
+```
+
+- 모든 Dataset 클래스는 반드시 `SARDataset`을 상속해야 합니다.
+- 모델은 항상 `get_model(name, num_classes)`로 생성하세요 (`core/models.py`).
+- `get_features(x)` 메서드: SMPL과 ResNet18SAR 모두 구현됨 — OOD/Grad-CAM에서 사용.
+
+---
+
+## 아키텍처
+
+### 데이터 흐름
+```
+raw MSTAR binary → read_mstar_complex() → interpolate_phase_history() → amplitude_to_tensor()
+PNG/JPEG images  → PIL.Image → numpy → torch.Tensor [1,128,128]
+```
+
+### 학습 파이프라인
+`train_model(model, train_ds, test_ds, config)` → `(model, EvalResult)`  
+내부: DataLoader → CrossEntropyLoss (또는 LSM/AT loss) → Adam → tqdm 진행 표시
+
+### OOD 탐지 (`core/evaluate.py:evaluate_ood`)
+- ODIN: temperature scaling(T=1000) + input perturbation(ε=0.0014) → softmax score
+- Mahalanobis: 훈련셋으로 클래스별 평균/공분산 추정 → `-0.5 * min_class_dist` score
+- AUROC, TNR@95TPR 계산
+
+### Grad-CAM (`gradcam/`)
+- `GradCAM(model)`: forward hook으로 feature map 저장, output tensor hook으로 gradient 저장
+- `cam(image_t.unsqueeze(0))` → [H,W] heat map (0~1 normalized)
+- `scatter_overlap.centers_to_mask()` + `iou()` → 산란점과 cam 일치도
+
+---
+
+## MSTAR 파일 형식 (중요)
+
+Phoenix binary format (`augmentation/ph_extraction.py`):
+- 파일 = [ASCII 헤더: `PhoenixHeaderLength` 바이트] + [SAR complex float32 데이터]
+- **`PhoenixSigSize` = 파일 전체 크기** (extra block이 아님 — 오해하기 쉬운 필드)
+- SAR 데이터 오프셋 = `PhoenixHeaderLength` 값만 사용
+- 데이터: big-endian float32, real+imag 교차 저장
+- 이미지 크기: 파일 확장자 = 앙각 코드 (`.017`=17°, `.015`=15°, `.026`=26°)
+- Mixed Targets CD2는 158×158 이미지 → `amplitude_to_tensor()`에서 128×128로 리사이즈
+
+---
+
+## 데이터 경로 (Google Drive — Colab 전용)
+
+```
+MyDrive/SAR_ATR_Project/data/
+├── clutter_gengzhe/          ← Exp A
+├── sample/png_images/
+│   ├── real/<class>/         ← Exp C 테스트 (measured)
+│   └── synth/<class>/        ← Exp C 학습 (synthetic)
+├── mstar/
+│   ├── MSTAR_PUBLIC_TARGETS_CHIPS_T72_BMP2_BTR70_SLICY/  ← Exp D
+│   ├── MSTAR_PUBLIC_MIXED_TARGETS_CD1/                   ← Exp B + D
+│   └── MSTAR_PUBLIC_MIXED_TARGETS_CD2/                   ← Exp B (주)
+└── sarship/                  ← Exp D OE
+```
+
+Colab 마운트:
+```python
+from google.colab import drive
+drive.mount('/content/drive')
+import subprocess
+subprocess.run(['ln', '-sf', '/content/drive/MyDrive/SAR_ATR_Project/data', '/content/repo/data'])
+```
+
+SAMPLE 클래스 10개 (소문자): `2s1 bmp2 btr70 m1 m2 m35 m60 m548 t72 zsu23`
+
+---
+
+## 알려진 설계 결정 및 주의사항
+
+**Exp B train/test split:** 80/20 랜덤 분할이 아닌 **cross-elevation split** 사용.
+파일 확장자로 앙각 판별 후 상위 2개 앙각을 train/test로 분리.
+같은 앙각 내 80/20 분할 시 99%+ 정확도 (trivial) — 논문 재현 불가.
+
+**Taylor 윈도우:** `scipy.signal.windows.taylor(sll=35)` — **양수** 값 사용.
+`sll=-35` 시 `arccosh` 정의역 위반 → NaN → 합성 이미지 전부 zeros.
+
+**`PHAugmentedDataset`:** lazy loading 설계 — `__init__`에서 경로 튜플만 저장,
+실제 I/O는 `__getitem__`에서만 수행. eager loading 복귀 시 `num_samples=0` 발생.
+
+**`FolderDataset` (exp_d):** Phoenix 헤더 확인 (`b"PhoenixHeaderVer"` in 첫 100바이트)
+후 파일 필터링. 헤더 없는 파일 학습 시 zeros 데이터 문제.
 
 ---
 
 ## 커밋 규칙
 
 - `feat:` 새 기능
-- `fix:` 버그 수정 (BUG-N 번호 명시 권장, 예: `fix: BUG-1 spatial scattering centers`)
+- `fix:` 버그 수정 (예: `fix: BUG-X1 taylor sll sign`)
 - `exp:` 실험 결과
 - `docs:` 문서
