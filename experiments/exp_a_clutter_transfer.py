@@ -249,6 +249,26 @@ CONDITIONS: list[Condition] = ["MSTAROR", "TrainOR+TestCT", "TrainCT+TestCT", "T
 MODEL_NAMES = ["smpl", "resnet18"]
 
 
+class _SyntheticClutterPool:
+    """clutter_bg 폴더가 없을 때 쓰는 합성 SAR 클러터 배경 풀.
+
+    SAR amplitude 클러터는 Rayleigh 분포를 따름 → |N(0,1)+jN(0,1)| 로 생성.
+    경계 아티팩트(feather 이음새) 정량화에는 실제 배경이 아니어도 무방 —
+    측정 대상은 '블렌딩이 타겟 경계를 얼마나 바꾸는가'이지 배경의 정체가 아님.
+    """
+
+    def __init__(self, image_size: int = 128, seed: int = 0):
+        self._size = image_size
+        self._rng = np.random.default_rng(seed)
+
+    def sample(self) -> "Tensor":
+        re = self._rng.standard_normal((self._size, self._size))
+        im = self._rng.standard_normal((self._size, self._size))
+        amp = np.hypot(re, im).astype(np.float32)   # Rayleigh amplitude
+        amp = amp / (amp.max() + 1e-8)
+        return torch.from_numpy(amp).unsqueeze(0)
+
+
 def run_boundary_ssim_analysis(
     n_samples: int = 20,
     seed: int = 0,
@@ -257,6 +277,8 @@ def run_boundary_ssim_analysis(
     """
     우리 팀 개선 #1: clutter transfer 경계 아티팩트를 SSIM으로 정량화.
     원본 chip vs feather_blend 결과의 SSIM을 측정해 경계 품질 검증.
+
+    clutter_bg/ 폴더가 있으면 실제 배경 사용, 없으면 합성 SAR 클러터로 폴백.
     """
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -265,12 +287,19 @@ def run_boundary_ssim_analysis(
         return {}
 
     bg_dir = DATA_ROOT / "clutter_bg"
-    if not bg_dir.exists():
-        print(f"[SSIM] No clutter_bg dir at {bg_dir} — skipping.")
-        return {}
+    if bg_dir.exists() and (sorted(bg_dir.glob("*.png")) or sorted(bg_dir.glob("*.jpg"))):
+        bg_pool: object = ClutterBgPool(bg_dir, seed=seed)
+        bg_source = "real"
+        print(f"[SSIM] Using real clutter backgrounds from {bg_dir}")
+    else:
+        bg_pool = _SyntheticClutterPool(seed=seed)
+        bg_source = "synthetic"
+        print(f"[SSIM] No clutter_bg dir — using synthetic SAR-speckle backgrounds.")
 
     orig_ds = MSTARImageFolder(DATA_ROOT / "Original MSTAR Images", TABLE4_CLASSES)
-    bg_pool = ClutterBgPool(bg_dir, seed=seed)
+    if len(orig_ds) == 0:
+        print("[SSIM] 'Original MSTAR Images' 비어있음 — skipping.")
+        return {}
 
     import random as _rng
     rng = _rng.Random(seed)
@@ -286,9 +315,11 @@ def run_boundary_ssim_analysis(
 
     mean_ssim = float(np.mean(ssim_scores)) if ssim_scores else 0.0
     std_ssim  = float(np.std(ssim_scores))  if ssim_scores else 0.0
-    print(f"[SSIM] Boundary SSIM (original vs feather-blended): {mean_ssim:.4f} ± {std_ssim:.4f}  (n={len(ssim_scores)})")
+    print(f"[SSIM] Boundary SSIM (original vs feather-blended, bg={bg_source}): "
+          f"{mean_ssim:.4f} ± {std_ssim:.4f}  (n={len(ssim_scores)})")
 
-    result = {"mean_ssim": mean_ssim, "std_ssim": std_ssim, "n": len(ssim_scores)}
+    result = {"mean_ssim": mean_ssim, "std_ssim": std_ssim,
+              "n": len(ssim_scores), "bg_source": bg_source}
     import json as _json
     with open(save_dir / "boundary_ssim.json", "w") as f:
         _json.dump(result, f, indent=2)
