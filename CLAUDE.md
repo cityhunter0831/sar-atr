@@ -108,7 +108,7 @@ Phoenix binary format (`augmentation/ph_extraction.py`):
 - **`PhoenixSigSize` = 파일 전체 크기** (extra block이 아님 — 오해하기 쉬운 필드)
 - SAR 데이터 오프셋 = `PhoenixHeaderLength` 값만 사용
 - 데이터: big-endian float32, real+imag 교차 저장
-- 이미지 크기: 파일 확장자 = 앙각 코드 (`.017`=17°, `.015`=15°, `.026`=26°)
+- **부각(앙각)은 헤더의 `DesiredDepression`/`MeasuredDepression` 필드에서 읽어야 함** — Mixed Targets의 파일 확장자(`.000`/`.001` 등)는 앙각이 아니라 단순 일련번호. (Targets chips는 `.017`/`.015` 확장자가 앙각이지만 Mixed Targets는 다름)
 - Mixed Targets CD2는 158×158 이미지 → `amplitude_to_tensor()`에서 128×128로 리사이즈
 
 ---
@@ -142,9 +142,11 @@ SAMPLE 클래스 10개 (소문자): `2s1 bmp2 btr70 m1 m2 m35 m60 m548 t72 zsu23
 
 ## 알려진 설계 결정 및 주의사항
 
-**Exp B train/test split:** 80/20 랜덤 분할이 아닌 **cross-elevation split** 사용.
-파일 확장자로 앙각 판별 후 상위 2개 앙각을 train/test로 분리.
-같은 앙각 내 80/20 분할 시 99%+ 정확도 (trivial) — 논문 재현 불가.
+**Exp B train/test split:** `_split_train_test()` 사용 — **헤더 부각 기반 cross-elevation split**.
+헤더에서 부각을 읽어 상위 2개 부각을 train/test로 분리 (`_depression_angle()`).
+어떤 클래스라도 한쪽이 비면 stratified 80/20으로 자동 폴백 (0% 정확도 방지).
+같은 앙각 내 랜덤 분할 시 99%+ 정확도 (trivial) — 논문 재현 불가.
+⚠️ 파일 확장자로 앙각을 판별하면 안 됨 (Mixed Targets 확장자는 일련번호).
 
 **Taylor 윈도우:** `scipy.signal.windows.taylor(sll=35)` — **양수** 값 사용.
 `sll=-35` 시 `arccosh` 정의역 위반 → NaN → 합성 이미지 전부 zeros.
