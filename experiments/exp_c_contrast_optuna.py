@@ -80,13 +80,13 @@ class ElevationFilteredDataset(SARDataset):
         from PIL import Image
         path, label = self._samples[idx]
         try:
-            img = Image.open(path).convert("L")
+            img = Image.open(path).convert("L").resize((128, 128))
             arr = np.array(img, dtype=np.float32) / 255.0
         except Exception:
-            # MSTAR raw fallback
+            # MSTAR raw fallback (크기 제각각 → 128×128 리사이즈 필수)
             from augmentation.ph_extraction import read_mstar_raw, amplitude_to_tensor
             arr_raw = read_mstar_raw(path)
-            arr = arr_raw / (arr_raw.max() + 1e-8)
+            arr = amplitude_to_tensor(arr_raw).squeeze(0).numpy()  # [128,128]
 
         t = torch.from_numpy(arr.astype(np.float32)).unsqueeze(0)
         meta = {"class_name": self._class_names[label], "elevation": 0, "source": str(path)}
@@ -158,7 +158,7 @@ class SampleDataset(SARDataset):
     def __getitem__(self, idx: int) -> SARSample:
         from PIL import Image
         path, label = self._samples[idx]
-        img = Image.open(path).convert("RGB").convert("L")
+        img = Image.open(path).convert("RGB").convert("L").resize((128, 128))
         arr = np.array(img, dtype=np.float32) / 255.0
         t = torch.from_numpy(arr).unsqueeze(0)
         meta = {
