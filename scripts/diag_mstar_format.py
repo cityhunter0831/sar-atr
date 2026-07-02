@@ -88,3 +88,40 @@ for d in check_dirs:
             print("  ✅ cross-elevation split 가능 (2개 이상 부각 존재)")
         else:
             print("  ⚠️  부각이 1종류뿐 — cross-elevation 불가, stratified split 사용")
+
+
+# ─── Exp B 7개 클래스 × 부각 교차표 (두 디스크 합산) ───────────────────────────
+print("\n" + "=" * 70)
+print("Exp B 클래스 × 부각 교차표 (CD1+CD2) — 어느 부각 조합이 가능한지 판정")
+print("=" * 70)
+
+from experiments.exp_b_ph_scattering import (  # noqa: E402
+    CLASSES, _collect_raw_files, _depression_angle,
+)
+
+# 두 디스크에서 클래스별 파일 수집 후 부각별 카운트
+per_class_dep: dict[str, Counter] = {c: Counter() for c in CLASSES}
+for d in check_dirs:
+    if not d.exists():
+        continue
+    fbc = _collect_raw_files(d, CLASSES)
+    for cls, files in fbc.items():
+        for p in files:
+            per_class_dep[cls][_depression_angle(p)] += 1
+
+# 등장하는 모든 부각 열 정렬
+all_deps = sorted(
+    {dep for c in CLASSES for dep in per_class_dep[c] if dep != "unknown"},
+    key=lambda x: int(x) if x.isdigit() else 999,
+)
+header = "  {:<10}".format("class") + "".join(f"{d + '°':>7}" for d in all_deps)
+print(header)
+print("  " + "-" * (len(header) - 2))
+for cls in CLASSES:
+    row = "  {:<10}".format(cls)
+    for d in all_deps:
+        row += f"{per_class_dep[cls].get(d, 0):>7}"
+    print(row)
+
+print("\n  → 모든 클래스가 값>0인 부각 2개를 고르면 그게 이상적 train/test 조합입니다.")
+print("     (표준 MSTAR SOC = train 17° / test 15°)")
