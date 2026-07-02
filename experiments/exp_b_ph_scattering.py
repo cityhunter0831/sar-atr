@@ -33,6 +33,7 @@ from augmentation.ph_extraction import (
     extract_spatial_scattering_centers,
     interpolate_phase_history,
     read_mstar_complex,
+    read_mstar_header,
     read_mstar_raw,
     visualize_scattering,
 )
@@ -77,6 +78,92 @@ def _collect_raw_files(root: Path, classes: list[str]) -> dict[str, list[Path]]:
         files = [p for p in candidates if _has_phoenix_header(p)]
         result[cls] = files
     return result
+
+
+# ─── train/test 분리 ──────────────────────────────────────────────────────────
+
+_DEPRESSION_KEYS = [
+    "DesiredDepression", "MeasuredDepression", "Depression",
+    "DepressionAngle", "TargetElevation", "Elevation",
+]
+
+
+def _depression_angle(path: Path) -> str:
+    """Phoenix 헤더에서 부각(depression angle)을 정수 도(°) 문자열로 추출.
+    확장자(.000/.001 등 일련번호)는 앙각이 아니므로 헤더를 사용.
+    실패 시 'unknown'."""
+    try:
+        hdr = read_mstar_header(path)
+    except Exception:
+        return "unknown"
+    for key in _DEPRESSION_KEYS:
+        if key in hdr:
+            try:
+                return str(int(round(float(hdr[key]))))
+            except ValueError:
+                continue
+    return "unknown"
+
+
+def _stratified_split(
+    files_by_class: dict[str, list[Path]], seed: int, train_ratio: float = 0.8
+) -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
+    """클래스별 80/20 랜덤 분할. 각 클래스가 train/test 양쪽에 반드시 존재하도록 보장."""
+    train_files: dict[str, list[Path]] = {}
+    test_files: dict[str, list[Path]] = {}
+    rng = random.Random(seed)
+    for cls, files in files_by_class.items():
+        shuffled = files[:]
+        rng.shuffle(shuffled)
+        if len(shuffled) >= 2:
+            n_train = max(1, min(len(shuffled) - 1, int(len(shuffled) * train_ratio)))
+        else:
+            n_train = len(shuffled)  # 1개뿐이면 train에만
+        train_files[cls] = shuffled[:n_train]
+        test_files[cls] = shuffled[n_train:]
+    return train_files, test_files
+
+
+def _split_train_test(
+    files_by_class: dict[str, list[Path]], seed: int
+) -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
+    """논문 Table 3 프로토콜: cross-elevation split 우선, 불가 시 stratified 폴백.
+
+    부각을 헤더에서 읽어 상위 2개 부각을 train/test로 분리.
+    단, 그 분리가 어떤 클래스에서 train 또는 test를 비우면 → stratified로 폴백.
+    """
+    from collections import Counter
+
+    dep_counter: Counter = Counter(
+        _depression_angle(p)
+        for files in files_by_class.values()
+        for p in files
+    )
+    dep_counter.pop("unknown", None)
+    top2 = [d for d, _ in dep_counter.most_common(2)]
+
+    if len(top2) >= 2:
+        train_dep, test_dep = top2[0], top2[1]
+        train_files = {
+            cls: [p for p in files if _depression_angle(p) == train_dep]
+            for cls, files in files_by_class.items()
+        }
+        test_files = {
+            cls: [p for p in files if _depression_angle(p) == test_dep]
+            for cls, files in files_by_class.items()
+        }
+        # 모든 클래스가 양쪽에 존재하는지 검증
+        ok = all(len(train_files[c]) > 0 for c in files_by_class) and \
+             all(len(test_files[c]) > 0 for c in files_by_class)
+        if ok:
+            print(f"  Cross-elevation split: train={train_dep}°, test={test_dep}°")
+            return train_files, test_files
+        print(f"  ⚠️  Cross-elevation split ({train_dep}°/{test_dep}°)이 일부 클래스를 "
+              f"비움 — stratified 80/20으로 폴백.")
+    else:
+        print("  ⚠️  헤더에서 2개 이상 부각을 못 찾음 — stratified 80/20 사용.")
+
+    return _stratified_split(files_by_class, seed)
 
 
 class MSTARRawDataset(SARDataset):
@@ -204,42 +291,14 @@ def run(
         for cls, files in files_by_class.items():
             print(f"  {cls}: {len(files)} files")
 
-        # Cross-elevation split: 논문 Table 3 프로토콜
-        # 파일 확장자 = 앙각 코드 (.017 → 17°, .015 → 15°, .026 → 26°)
-        # 가장 많은 두 앙각을 train/test로 분리 → 도메인 갭 재현
-        from collections import Counter
-
-        def _elev(p: Path) -> str:
-            ext = p.suffix.lstrip(".")
-            return ext if ext.isdigit() else "unknown"
-
-        elev_counter: Counter = Counter(
-            _elev(p)
-            for files in files_by_class.values()
-            for p in files
-            if _elev(p) != "unknown"
-        )
-        top2 = [e for e, _ in elev_counter.most_common(2)]
-
-        train_files: dict[str, list[Path]] = {}
-        test_files:  dict[str, list[Path]] = {}
-
-        if len(top2) >= 2:
-            train_elev, test_elev = top2[0], top2[1]
-            print(f"  Cross-elevation split: train={train_elev}°, test={test_elev}°")
-            for cls, files in files_by_class.items():
-                train_files[cls] = [p for p in files if _elev(p) == train_elev]
-                test_files[cls]  = [p for p in files if _elev(p) == test_elev]
-        else:
-            # 앙각이 1종류뿐이면 80/20 랜덤 폴백
-            print(f"  Single elevation ({top2[0] if top2 else '?'}°) — falling back to 80/20 split.")
-            rng = random.Random(seed)
-            for cls, files in files_by_class.items():
-                shuffled = files[:]
-                rng.shuffle(shuffled)
-                n_train = max(1, int(len(shuffled) * 0.8))
-                train_files[cls] = shuffled[:n_train]
-                test_files[cls]  = shuffled[n_train:]
+        # 논문 Table 3 프로토콜: cross-elevation split (헤더 부각 기반).
+        # 확장자(.000/.001)는 앙각이 아니라 일련번호이므로 헤더에서 부각을 읽음.
+        train_files, test_files = _split_train_test(files_by_class, seed)
+        n_train_total = sum(len(v) for v in train_files.values())
+        n_test_total = sum(len(v) for v in test_files.values())
+        print(f"  → train {n_train_total}개 / test {n_test_total}개")
+        for cls in CLASSES:
+            print(f"     {cls}: train={len(train_files[cls])} test={len(test_files[cls])}")
 
         base_ds = MSTARRawDataset(train_files, CLASSES)
         aug_ds  = PHAugmentedDataset(train_files, CLASSES, n_alphas=n_interp, seed=seed)
