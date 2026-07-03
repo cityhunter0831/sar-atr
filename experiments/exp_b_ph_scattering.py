@@ -410,15 +410,17 @@ def run_gradcam_analysis(
             print(f"  Skip {p.name}: {e}")
             continue
 
-        image_t = amplitude_to_tensor(amp)
-        spatial_centers = extract_spatial_scattering_centers(amp, k=k)
-        ph_map = extract_scattering_centers(amp, k=k)
+        image_t = amplitude_to_tensor(amp)          # [1,128,128] (리사이즈됨)
+        amp128 = image_t.squeeze(0).numpy()         # CAM과 동일 좌표계(128×128)
+        # 산란점·마스크는 CAM과 같은 128×128에서 추출해야 IoU 계산 가능
+        spatial_centers = extract_spatial_scattering_centers(amp128, k=k)
+        ph_map = extract_scattering_centers(amp128, k=k)
 
         gcam = GradCAM(model)
-        cam = gcam(image_t.unsqueeze(0))
+        cam = gcam(image_t.unsqueeze(0))            # [128,128]
         gcam.remove()
 
-        h, w = amp.shape
+        h, w = amp128.shape                          # 128, 128 — cam과 일치
         scatter_mask = centers_to_mask(spatial_centers, h, w)
         iou = compute_iou(scatter_mask, cam)
 
@@ -428,7 +430,7 @@ def run_gradcam_analysis(
         for cy, cx in ph_map.scattering_centers:
             axes[1].plot(cx, cy, "c+", markersize=8, markeredgewidth=2)
         axes[1].set_title(f"PH Spectrum (top-{k})"); axes[1].axis("off")
-        axes[2].imshow(amp, cmap="gray")
+        axes[2].imshow(amp128, cmap="gray")          # cam과 동일 128×128
         axes[2].imshow(cam, cmap="jet", alpha=0.5)
         axes[2].set_title(f"Grad-CAM (IoU={iou:.2f})"); axes[2].axis("off")
         plt.tight_layout()
