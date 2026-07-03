@@ -421,8 +421,18 @@ def run_gradcam_analysis(
         gcam.remove()
 
         h, w = amp128.shape                          # 128, 128 — cam과 일치
-        scatter_mask = centers_to_mask(spatial_centers, h, w)
-        iou = compute_iou(scatter_mask, cam)
+        scatter_mask = centers_to_mask(spatial_centers, h, w, radius=6)
+        # CAM을 상위 분위수로 이진화 (고정 0.5는 peaked CAM에서 거의 비어 IoU=0 유발)
+        cam_thr = float(np.percentile(cam, 80))      # 상위 20% attention 영역
+        cam_bin = (cam > cam_thr).astype(np.float32)
+        iou = compute_iou(scatter_mask, cam_bin, threshold=0.5)
+        # 보조(주) 지표: 산란점 위치에서의 평균 CAM 활성도 (0~1, 강건함)
+        center_vals = [
+            float(cam[int(np.clip(cy, 0, h - 1)), int(np.clip(cx, 0, w - 1))])
+            for cy, cx in spatial_centers
+        ]
+        cam_coverage = float(np.mean(center_vals)) if center_vals else 0.0
+        cam_baseline = float(cam.mean())             # 전체 평균 CAM (기준선)
 
         fig, axes = plt.subplots(1, 3, figsize=(12, 4))
         axes[0].imshow(amp, cmap="gray"); axes[0].set_title("Amplitude"); axes[0].axis("off")
@@ -432,18 +442,30 @@ def run_gradcam_analysis(
         axes[1].set_title(f"PH Spectrum (top-{k})"); axes[1].axis("off")
         axes[2].imshow(amp128, cmap="gray")          # cam과 동일 128×128
         axes[2].imshow(cam, cmap="jet", alpha=0.5)
-        axes[2].set_title(f"Grad-CAM (IoU={iou:.2f})"); axes[2].axis("off")
+        # 산란점 위치 표시 (CAM이 여기 몰리는지 눈으로 확인)
+        for cy, cx in spatial_centers:
+            axes[2].plot(cx, cy, "w+", markersize=10, markeredgewidth=2)
+        axes[2].set_title(f"Grad-CAM (coverage={cam_coverage:.2f}, IoU={iou:.2f})")
+        axes[2].axis("off")
         plt.tight_layout()
         fig.savefig(save_dir / f"{p.stem}_analysis.png", dpi=150)
         plt.close(fig)
 
-        rec = {"file": p.name, "iou": iou, "n_centers": len(spatial_centers)}
-        print(f"  {p.name:40s}  IoU={iou:.3f}  centers={len(spatial_centers)}")
+        rec = {"file": p.name, "iou": iou, "cam_coverage": cam_coverage,
+               "cam_baseline": cam_baseline, "n_centers": len(spatial_centers)}
+        print(f"  {p.name:40s}  coverage={cam_coverage:.3f} (기준선 {cam_baseline:.3f})  IoU={iou:.3f}")
         records.append(rec)
 
-    valid = [r["iou"] for r in records if r["iou"] > 0]
-    if valid:
-        print(f"\nMean IoU = {np.mean(valid):.3f}  (n={len(valid)})")
+    if records:
+        mean_cov = np.mean([r["cam_coverage"] for r in records])
+        mean_base = np.mean([r["cam_baseline"] for r in records])
+        mean_iou = np.mean([r["iou"] for r in records])
+        ratio = mean_cov / mean_base if mean_base > 0 else 0.0
+        print(f"\n── Grad-CAM 산란점 정합 요약 ──")
+        print(f"  산란점 CAM 활성도(coverage) = {mean_cov:.3f}")
+        print(f"  전체 평균 CAM(기준선)        = {mean_base:.3f}")
+        print(f"  비율 = {ratio:.2f}×  ({'>1 → 모델이 산란점에 더 집중' if ratio > 1 else '≤1 → 산란점 밖에 집중'})")
+        print(f"  평균 IoU = {mean_iou:.3f}")
     return records
 
 
