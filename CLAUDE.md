@@ -106,8 +106,8 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 - 데이터 오면 → 2단계(FISTA 복원) 건너뛰고 검증에만 사용.
 
 ### 진척도
-- [x] 1단계 preprocess (`augmentation/ph_sparse.py`) — `image_to_ph()`/`ph_to_image()`. 합성 round-trip |corr|=0.966. **실데이터 Colab 검증 대기**
-- [ ] 2단계 FISTA 그룹 희소 복원 (`sparse_recover()`)
+- [x] 1단계 preprocess (`augmentation/ph_sparse.py`) — `image_to_ph()`/`ph_to_image()`. **실데이터 center64 round-trip |corr|=0.99 검증 완료** ✅
+- [ ] 2단계 FISTA 그룹 희소 복원 (`sparse_recover()`) — 진행 중
 - [ ] 3단계 방위각 재합성 (`synthesize()`, ±dθ 외삽)
 - [ ] Colab 검증 (합성 이미지 vs 실이미지, Fig.4 비교)
 - [ ] few-shot 136 → Aug1 증강 적용 → 목표 96.4%
