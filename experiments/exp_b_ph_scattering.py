@@ -181,13 +181,16 @@ def _split_train_test(
             dep_of[p] = _depression_angle(p)
 
     dep_counter: Counter = Counter(d for d in dep_of.values() if d != "unknown")
-    top2 = [d for d, _ in dep_counter.most_common(2)]
 
-    if len(top2) < 2:
-        print("  ⚠️  헤더에서 2개 이상 부각을 못 찾음 — stratified 80/20 사용.")
-        return _stratified_split(files_by_class, seed)
-
-    train_dep, test_dep = top2[0], top2[1]
+    # 논문 SOC = train 17° / test 15°. 둘 다 존재하면 명시적으로 사용 (Table 2/3).
+    if dep_counter.get("17", 0) > 0 and dep_counter.get("15", 0) > 0:
+        train_dep, test_dep = "17", "15"
+    else:
+        top2 = [d for d, _ in dep_counter.most_common(2)]
+        if len(top2) < 2:
+            print("  ⚠️  헤더에서 2개 이상 부각을 못 찾음 — stratified 80/20 사용.")
+            return _stratified_split(files_by_class, seed)
+        train_dep, test_dep = top2[0], top2[1]
     print(f"  Cross-depression split: train={train_dep}°, test={test_dep}°")
 
     train_files: dict[str, list[Path]] = {}
