@@ -51,18 +51,20 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 | 개선 #2 옵티마이저 | ADAM 고정 | ADAM vs SGD | 증강 효과의 옵티마이저 의존성 분석 (우리 기여) |
 | 개선 #3 Grad-CAM | (없음) | 추가 | 물리적 해석가능성 검증 (우리 기여) |
 
-### 🔧 트러블슈팅 (논문과 어긋남 = 수정 대상, 우선순위 순)
-| # | 실험 | 현재 문제 | 논문 정답 | 상태 |
-|---|---|---|---|---|
-| T1 | Exp B | 7클래스 전체(2049장) 학습 → 98% | 5클래스 **few-shot 136장** baseline → 56.6% | 🔴 재설계 |
-| T2 | Exp B | 128×128 resize | **64×64 center-crop** | 🔴 |
-| T3 | Exp B | CrossEntropy 기본 손실 | **AT(ε=2) / LSM(lblsm=0.1)** | 🔴 |
-| T4 | Exp B | 인접 파일 alpha 보간 | **azimuth 이웃(±1°) PH 보간** | 🔴 |
-| T5 | Exp A | TrainCTx2 붕괴(39%) | 회복(**96.0%**) — 2배 증강 버그 | 🔴 |
-| T6 | Exp D | ID=MSTAR, SAR-ship=OOD테스트 | **ID=SAMPLE**, SAR-ship=**OE 학습** | 🟠 재설계 |
-| T7 | Exp C | 목표치 불명확 | K=0에서 **RN18 94.5%** 명시 | 🟡 |
-| ✅ | Exp B | ~~파일 포맷 [진폭][위상] 오독~~ | 고침 (BUG-X4) | 완료 |
-| ✅ | 공통 | ~~Taylor sll 부호, 헤더 오프셋 등~~ | 고침 (BUG-X1~X3) | 완료 |
+### 🔧 트러블슈팅 (논문과 어긋남 = 수정 대상)
+| # | 실험 | 문제 → 논문 정답 | 상태 |
+|---|---|---|---|
+| T1 | Exp B | 7클래스 전체(2049장) → 5클래스 **few-shot 136장** (56.6%) | ✅ 코드 반영 (`few_shot=True`, 5클래스, `FEWSHOT_COUNTS`) |
+| T2 | Exp B | 128 resize → **64×64 center-crop** | ✅ `amplitude_to_tensor(center_crop=64)` |
+| T3 | Exp B | CE → **AT(ε=2)/LSM** | ✅ `run(loss_type='at'/'lsm')` |
+| T4 | Exp B | 인접파일 보간 → **azimuth 이웃 PH 보간** | ✅ `read_azimuth` 정렬 pairing |
+| T5 | Exp A | TrainCTx2 붕괴(39%) → 회복(**96.0%**) | 🟠 진단 로깅 추가 — **Colab 실행해 폴더 로드수 확인 필요** |
+| T6 | Exp D | ID=MSTAR → **ID=SAMPLE 10클래스**, SAR-ship=far-OOD | ✅ `SampleDataset` 기반 재설계 |
+| T7 | Exp C | 목표 불명확 → K=0 **RN18 94.5%** 명시 | ✅ `_print_figure1` 수정 |
+| ✅ | 공통 | ~~BUG-X1~X4 (Taylor 부호/오프셋/포맷)~~ | 완료 |
+
+> **T1~T4,T6,T7은 코드 반영 완료. 실데이터 검증은 Colab 필요.** T5는 진단 로깅만 넣음(원인 확정에 Colab 실행 필요).
+> Exp B 실행: `run(model_name='smpl', loss_type='at')` → 목표 SMPL/AT **56.6%→96.4%** (few-shot이 핵심).
 
 ---
 
