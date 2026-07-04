@@ -189,27 +189,36 @@ def _group_soft_threshold(C: np.ndarray, tau: float) -> np.ndarray:
 
 
 def sparse_recover(ph_polar: np.ndarray, depression_deg: float,
-                   sigma_g: float = 1.0, lam: float = 0.05,
-                   n_iter: int = 200, grid_side: int = N_TARGET
+                   sigma_g: float = 1.0, lam_frac: float = 0.1,
+                   n_iter: int = 300, grid_side: int = N_TARGET
                    ) -> tuple[np.ndarray, "SAROperator"]:
     """[STAGE 2] Eq.7 그룹 희소 복원 (FISTA). SPGL1 대체.
        min_C 0.5‖A(C)−S‖² + λ Σ_k‖c_k‖₂
+
+    λ = lam_frac · λ_max (표준 lasso 스케일링).
+      λ_max = max_k‖[Aᴴy]_k‖₂  이상이면 C 전부 0.
+      lam_frac ∈ 0~1: 클수록 희소(활성 산란점 적음). 감이 아니라 데이터 상대값.
     반환: (복원 계수 C [S×D], 연산자 A)
     """
     A = SAROperator(depression_deg, sigma_g, grid_side=grid_side)
     D = A.B.shape[1]
     n = A.n_spatial
-    # 립시츠 상수 근사(파워법 대신 보수적 스텝). ‖A‖² 추정.
     C = np.zeros((n, D), dtype=np.complex128)
-    # 스텝: power iteration으로 ‖AᴴA‖(최대고유값) 추정 → step=1/L
+
+    # λ_max: C=0에서 gradient = -Aᴴy. 그룹별 노름의 최대.
+    g0 = A.adjoint(ph_polar)                                           # Aᴴy (S×D)
+    lam_max = np.sqrt((np.abs(g0) ** 2).sum(axis=1)).max()
+    lam = lam_frac * lam_max
+
+    # step = 1/L, L=‖AᴴA‖ (power iteration)
     v = np.random.default_rng(0).standard_normal((n, D)) + 0j
     v /= np.linalg.norm(v)
     L = 1.0
-    for _ in range(8):
+    for _ in range(10):
         w = A.adjoint(A.forward(v))
         L = np.linalg.norm(w)
         v = w / (L + 1e-30)
-    step = 1.0 / (L * 1.01)                                            # 약간 보수적
+    step = 1.0 / (L * 1.01)
 
     Z = C.copy(); t = 1.0
     for _ in range(n_iter):
