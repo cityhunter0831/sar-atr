@@ -127,16 +127,26 @@ def load_aug_images(mat_dir: str | Path, class_names=AUG_CLASSES):
     return np.concatenate(imgs, 0), np.concatenate(labels, 0)
 
 
-class AugImagesDataset:
-    """SARDataset 호환 — 로컬 MATLAB이 생성한 증강 이미지(.mat)로 학습.
-    core.interfaces.SARDataset을 상속하도록 experiments 쪽에서 감싸 사용."""
+try:
+    from core.interfaces import SARDataset as _SARDataset, SARSample as _SARSample
+except Exception:  # core 미로딩 환경(단독 검사)에서도 import 되게
+    _SARDataset = object
+    _SARSample = None
+
+
+class AugImagesDataset(_SARDataset):
+    """SARDataset — 로컬 MATLAB이 생성한 증강 이미지(.mat)로 few-shot 학습.
+    `train_model(model, AugImagesDataset(...), test_ds, cfg)`로 바로 투입 가능."""
 
     def __init__(self, mat_dir: str | Path, class_names=AUG_CLASSES,
-                 max_per_sample: int | None = None):
+                 per_image_norm: bool = True):
         self._class_names = list(class_names)
         imgs, labels = load_aug_images(mat_dir, class_names)
-        # 진폭 정규화 [0,1]
-        self._imgs = imgs / (imgs.max() + 1e-8)
+        if per_image_norm:                                     # 이미지별 [0,1] 정규화
+            mx = imgs.reshape(imgs.shape[0], -1).max(1)[:, None, None] + 1e-8
+            self._imgs = (imgs / mx).astype(np.float32)
+        else:
+            self._imgs = (imgs / (imgs.max() + 1e-8)).astype(np.float32)
         self._labels = labels
 
     def __len__(self):
