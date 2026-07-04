@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > 📌 **이 문서는 "코어 구현 방향·이론적 배경·진척도"의 살아있는 기록이다.**
 > 핵심 구현 방향이나 진행 상태가 바뀌면 (지시 없어도) 이 문서를 갱신할 것.
-> 참조 문서: `docs/PAPER_SPEC.md`(Geng 논문 표·수치) · `docs/DATASET_METHOD.md`(데이터셋·정당성) · `docs/2b626a7d-sensors2300941.pdf`(Geng 원문) · `docs/9eac9493-2012.09284v2.pdf`(Agarwal 위상보간 원전)
+> 참조 문서: `docs/PAPER_SPEC.md`(Geng 논문 표·수치) · `docs/DATASET_METHOD.md`(데이터셋·정당성) · `docs/THEORY_REFERENCES.md`(이론배경·참조논문·구현난점·검증기준, 보고서용) · `docs/2b626a7d-sensors2300941.pdf`(Geng 원문) · `docs/9eac9493-2012.09284v2.pdf`(Agarwal 위상보간 원전)
 
 ## 프로젝트 개요
 
