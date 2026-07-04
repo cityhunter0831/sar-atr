@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> 📌 **이 문서는 "코어 구현 방향·이론적 배경·진척도"의 살아있는 기록이다.**
+> 핵심 구현 방향이나 진행 상태가 바뀌면 (지시 없어도) 이 문서를 갱신할 것.
+> 참조 문서: `docs/PAPER_SPEC.md`(Geng 논문 표·수치) · `docs/DATASET_METHOD.md`(데이터셋·정당성) · `docs/2b626a7d-sensors2300941.pdf`(Geng 원문) · `docs/9eac9493-2012.09284v2.pdf`(Agarwal 위상보간 원전)
+
 ## 프로젝트 개요
 
 Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Training Data Augmentation") 재현 및 개선 과제.
@@ -65,6 +69,48 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 
 > **T1~T4,T6,T7은 코드 반영 완료. 실데이터 검증은 Colab 필요.** T5는 진단 로깅만 넣음(원인 확정에 Colab 실행 필요).
 > Exp B 실행: `run(model_name='smpl', loss_type='at')` → 목표 SMPL/AT **56.6%→96.4%** (few-shot이 핵심).
+
+---
+
+## ⭐ Exp B 위상보간 — 완전판 구현 방향 (진행 중, 코어)
+
+### 이론적 배경 (왜 이 방법인가)
+- Geng 논문은 위상보간을 **직접 구현하지 않고 Agarwal et al. [19] 방법을 채택**("we adopt the method proposed in Agarwal et al."). 따라서 정답 구현체 = `docs/9eac9493-2012.09284v2.pdf` + `SENSE-Lab-OSU/mstar_data_aug`(MATLAB).
+- 핵심 원리: SAR 타겟은 소수의 **산란점(scattering centers)에 에너지가 집중**(스파시티). 그 산란점의 위치·계수만 알면 **위상이력(PH) 도메인에서 임의 방위각의 이미지를 물리적으로 재합성** 가능.
+- 수식: Eq.6(격자 point-scatterer forward 모델) → **Eq.7 그룹 희소 복원** `min_C(Σλ‖c_k‖₂ + ‖S−Ŝ‖_F)` → Eq.8(임의 θ 재합성). Fig.3이 전체 파이프라인.
+
+### ❌ 기존 구현의 오류 (버려야 함)
+- `interpolate_phase_history(img_a, img_b, alpha)` = **두 이미지 선형 평균**. 산란점을 전혀 안 씀 → 논문 방법 아님. few-shot에서 65% 정체의 원인.
+
+### ✅ 완전판 3단계 (구현 계획)
+| 단계 | 대응 MATLAB | 하는 일 | Python 구현 |
+|---|---|---|---|
+| 1. preprocess | `preprocess_raw_data.m` | 복소이미지 → FFT_shift → 2D_FFT → K-space → inverted Taylor → Cartesian→Polar 보간 → PH(극좌표) | scipy FFT + `griddata` |
+| 2. sparse recovery | `sparse_recovery.m` (SPGL1) | Eq.7 그룹 희소 복원으로 산란점 계수 C 추정 + σ_G 라인서치 | **FISTA + 그룹 soft-threshold** (SPGL1 불필요) |
+| 3. synthesize | `generate_aug_images.m` | Eq.8로 ±6° 방위각 외삽 + subpixel shift → Polar→Cartesian → Taylor → IFFT | numpy(mtimesx 대체) + `griddata` |
+
+### 정당성 (논문과 다르게 가는 부분)
+- **2단계 solver를 SPGL1 대신 FISTA+그룹prox로**: Eq.7은 표준 group-lasso(L2,1). FISTA 근접경사법으로 동일 문제를 풂 → MATLAB MEX 의존성 제거, Python 순정. **결과 동등, 구현 단순**.
+- **mtimesx(MEX) → numpy matmul**, **scatteredInterpolant → scipy.griddata**: 언어 대체일 뿐 수식 동일.
+
+### 데이터 규모 (혼동 금지)
+- **136장 = Geng Table 2 (5클래스, few-shot baseline)** — 우리 재현 목표. 이 136장 각각을 위상보간으로 증강해 Aug1(1088장) 구성.
+- Agarwal 원전은 10클래스를 R∈{2⁻⁵..2⁰} 비율로 줄임(136 고정 아님). 방법은 Agarwal, 규모는 Geng.
+
+### 파라미터 (논문·MATLAB 확인값)
+- 패치 L=30m, 해상도 0.3m → 격자 100×100. f_center=9.6GHz, BW=521MHz, 100 freq bins.
+- 가우시안 기저 D=12(3° 서브개구), σ_G 이미지별 라인서치. Taylor(100,4,−35). 입력 64×64 crop. 외삽 ±6°(η=3).
+
+### precomputed 데이터 상태
+- 저자 OSU Box 링크(`phase_histories.zip`,`recovered_coefficients.zip`) **삭제됨(404)**. 저자(agarwal.270a@osu.edu)에 이메일 요청 보냄(대기).
+- 데이터 오면 → 2단계(FISTA 복원) 건너뛰고 검증에만 사용.
+
+### 진척도
+- [ ] 1단계 preprocess (`augmentation/ph_sparse.py`)
+- [ ] 2단계 FISTA 그룹 희소 복원
+- [ ] 3단계 방위각 재합성
+- [ ] Colab 검증 (합성 이미지 vs 실이미지, Fig.4 비교)
+- [ ] few-shot 136 → Aug1 증강 적용 → 목표 96.4%
 
 ---
 
