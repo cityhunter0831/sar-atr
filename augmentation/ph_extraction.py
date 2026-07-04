@@ -173,9 +173,12 @@ def interpolate_phase_history(
     return np.abs(img_interp).astype(np.float32)
 
 
-def amplitude_to_tensor(amp: np.ndarray, target_size: int = 128) -> Tensor:
+def amplitude_to_tensor(
+    amp: np.ndarray, target_size: int = 128, center_crop: int | None = None
+) -> Tensor:
     """Normalize amplitude image to [0,1] float32 Tensor [1, H, W].
-    Mixed Targets 이미지는 158×158 등 다양한 크기 → target_size×target_size로 리사이즈.
+    이미지 크기 다양(158×158 등) → target_size로 리사이즈.
+    center_crop 지정 시(예: 64) 중앙을 잘라냄 — 논문 Exp B는 64×64 center-crop 사용.
     """
     import torch.nn.functional as F
     a = amp.astype(np.float32)
@@ -183,7 +186,19 @@ def amplitude_to_tensor(amp: np.ndarray, target_size: int = 128) -> Tensor:
     t = torch.from_numpy(a).unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
     if a.shape[0] != target_size or a.shape[1] != target_size:
         t = F.interpolate(t, size=(target_size, target_size), mode="bilinear", align_corners=False)
+    if center_crop is not None and center_crop < target_size:
+        off = (target_size - center_crop) // 2
+        t = t[:, :, off:off + center_crop, off:off + center_crop]
     return t.squeeze(0)  # [1, H, W]
+
+
+def read_azimuth(path) -> float:
+    """Phoenix 헤더에서 방위각(TargetAz)을 읽음. PH 보간의 azimuth 이웃 pairing에 사용."""
+    try:
+        hdr = read_mstar_header(path)
+        return float(hdr.get("TargetAz", "nan"))
+    except Exception:
+        return float("nan")
 
 
 # ─── Phase history analysis ───────────────────────────────────────────────────
