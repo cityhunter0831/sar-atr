@@ -108,7 +108,12 @@ def ph_to_image(ph_polar: np.ndarray, depression_deg: float) -> np.ndarray:
     yy = np.linspace(k_2.min(), k_2.max(), N_TARGET)
     XX, YY = np.meshgrid(xx, yy)
     pts = np.column_stack([k_1.ravel(), k_2.ravel()])
-    cart = griddata(pts, ph_polar.ravel(), (XX, YY), method="nearest", fill_value=0)
+    # 'linear'(부드러움, MATLAB scatteredInterpolant 'natural'에 근접) + convex hull 밖은 nearest
+    cart = griddata(pts, ph_polar.ravel(), (XX, YY), method="linear")
+    nan = np.isnan(cart)
+    if nan.any():
+        cart_n = griddata(pts, ph_polar.ravel(), (XX, YY), method="nearest")
+        cart[nan] = cart_n[nan]
 
     fft_cart = np.zeros((N_CROP, N_CROP), dtype=np.complex128)
     off = N_CROP // 2 - N_TARGET // 2
@@ -127,6 +132,9 @@ if __name__ == "__main__":
     rec = ph_to_image(ph, depression_deg=17.0)
     a = np.abs(_center_crop(np.flipud(img), 128))
     b = np.abs(rec)
-    corr = np.corrcoef(a.ravel(), b.ravel())[0, 1]
-    print(f"PH shape={ph.shape}, round-trip |corr|={corr:.3f} "
-          f"(1에 가까울수록 좌표/FFT 규약 정확)")
+    # 공정 비교 = 중앙 64×64 (마스킹된 유효 영역, 논문도 64 crop)
+    a64, b64 = _center_crop(a, 64), _center_crop(b, 64)
+    corr_full = np.corrcoef(a.ravel(), b.ravel())[0, 1]
+    corr_64 = np.corrcoef(a64.ravel(), b64.ravel())[0, 1]
+    print(f"PH shape={ph.shape}  round-trip |corr| full128={corr_full:.3f}  "
+          f"center64={corr_64:.3f} (center64가 유효 기준)")
