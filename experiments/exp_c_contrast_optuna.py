@@ -376,16 +376,21 @@ def run_el_ablation(
     with open(save_dir / "metrics.json", "w") as f:
         json.dump(results, f, indent=2)
 
-    _print_figure1(acc_el30_no_aug, acc_el30_aug)
+    _print_figure1(acc_el30_no_aug, acc_el30_aug,
+                   ref_base="65.3", ref_aug="88.5", target=88.5)  # MSTAR Figure 1
     return results
 
 
-def _print_figure1(acc_no_aug: float, acc_aug: float):
-    print("\n── Figure 1 Reproduction ─────────────────────────")
-    print(f"  synthetic→measured (no aug):  {acc_no_aug:5.1f}%  (paper: ~65.3%)")
-    print(f"  synthetic→measured (CLAHE):   {acc_aug:5.1f}%  (target: ≥88.5%)")
-    status = "PASS ✓" if acc_aug >= 88.5 else "FAIL ✗"
-    print(f"  Criterion: {status}")
+def _print_figure1(acc_no_aug: float, acc_aug: float,
+                   ref_base: str = "91.9", ref_aug: str = "94.5", target: float = 94.5):
+    """SAMPLE 주 실험(Table 6, K=0) 기준 출력.
+    논문 RN18: SAMPLE(Ori) 91.9% → SAMPLE(Aug) 94.5% (K=0, 100% synthetic→measured).
+    run_el_ablation은 MSTAR Figure 1 수치(65.3→88.5)를 넘겨 호출."""
+    print("\n── Exp C 재현 (SAMPLE Table 6, K=0) ──────────────")
+    print(f"  synthetic→measured (no aug):  {acc_no_aug:5.1f}%  (논문 RN18: {ref_base}%)")
+    print(f"  synthetic→measured (대비증강): {acc_aug:5.1f}%  (논문 RN18: {ref_aug}%)")
+    status = "달성 ✓" if acc_aug >= target else "미달 ✗"
+    print(f"  목표({target}%): {status}")
     print("──────────────────────────────────────────────────")
 
 

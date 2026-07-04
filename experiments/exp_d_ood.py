@@ -33,21 +33,19 @@ from core.models import get_model
 from core.train import train_model
 
 RESULTS_DIR = Path("results/exp_d")
-MSTAR_TARGETS_DIR = Path("data/mstar/MSTAR_PUBLIC_TARGETS_CHIPS_T72_BMP2_BTR70_SLICY/TARGETS/TRAIN/17_DEG")
-MSTAR_MIXED_DIRS = [
-    Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD1"),
-    Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD2"),
-]
 SARSHIP_DIR = Path("data/sarship")
 
-# 확보된 전체 10개 클래스 (Targets 3 + Mixed 7)
-ALL_CLASSES = ["BMP2", "BTR70", "T72", "2S1", "BRDM_2", "BTR_60", "D7", "T62", "ZIL131", "ZSU_23_4"]
+# T6 재설계: 논문은 ID=SAMPLE 10클래스, OE=SAR-ship(+MiniSAR 비공개), OOD=Holdout+MSTAR-O/P.
+# SAMPLE 클래스 #0~#9 (논문 순서). exp_c의 SampleDataset 재사용.
+from experiments.exp_c_contrast_optuna import SampleDataset, SAMPLE_ROOT  # noqa: E402
+ALL_CLASSES = ["2s1", "bmp2", "btr70", "m1", "m2", "m35", "m548", "m60", "t72", "zsu23"]
 
-# Holdout combinations: J unknown classes removed from training
+# Holdout combinations: J개 SAMPLE 클래스를 학습에서 제외 (near-OOD).
+# 논문 Figure 11: M35(#5)+M548(#6) 동시 제외 시 탐지 쉬움 → 대표 조합 선택.
 HOLDOUT_CONFIGS: dict[int, list[str]] = {
-    1: ["ZSU_23_4"],
-    2: ["ZSU_23_4", "ZIL131"],
-    3: ["ZSU_23_4", "ZIL131", "T62"],
+    1: ["m548"],
+    2: ["m35", "m548"],
+    3: ["m35", "m548", "t72"],
 }
 
 
@@ -166,21 +164,22 @@ class _SubsetWithNames(SARDataset):
 # ─── Data loading ─────────────────────────────────────────────────────────────
 
 def _data_available() -> bool:
-    return MSTAR_TARGETS_DIR.exists() and any(MSTAR_TARGETS_DIR.iterdir())
+    return SAMPLE_ROOT.exists() and any(SAMPLE_ROOT.iterdir())
 
 
 def load_id_holdout(
     j: int = 1, class_names: list[str] = ALL_CLASSES
 ) -> tuple[SARDataset, SARDataset, SARDataset, SARDataset]:
     """
-    Returns (train_ds, test_id_ds, test_holdout_ds, oe_ds).
-    Falls back to mock if real data absent.
+    T6 재설계: ID = SAMPLE 10클래스. Holdout = J개 SAMPLE 클래스(near-OOD),
+    OE(=OOD 교차도메인) = SAR-ship.
+    Returns (train_ds, test_id_ds, test_holdout_ds, oe_ds). 실데이터 없으면 mock.
     """
     holdout = HOLDOUT_CONFIGS[j]
     known = [c for c in class_names if c not in holdout]
 
     if not _data_available():
-        print(f"[Exp D] Real data not found at {MSTAR_TARGETS_DIR} — using MockSARDataset.")
+        print(f"[Exp D] SAMPLE not found at {SAMPLE_ROOT} — using MockSARDataset.")
         return (
             MockSARDataset(n=300, num_classes=len(known), seed=0),
             MockSARDataset(n=100, num_classes=len(known), seed=1),
@@ -188,29 +187,18 @@ def load_id_holdout(
             MockSARDataset(n=100, num_classes=1, seed=3),  # mock OE
         )
 
-    # BUG-2 수정: 80/20 분리로 데이터 누수 방지
-    # Targets + Mixed CD1/CD2 합산 로드
-    all_roots = [MSTAR_TARGETS_DIR] + MSTAR_MIXED_DIRS
-    from core.train import _set_seed
-    full_known = FolderDataset(all_roots, known)
-    from torch.utils.data import random_split
-    _set_seed(0)
-    n_train = int(len(full_known) * 0.8)
-    n_test = len(full_known) - n_train
-    import torch
-    train_sub, test_sub = random_split(full_known, [n_train, n_test],
-                                       generator=torch.Generator().manual_seed(0))
-    # Subset은 class_names가 없음 → Mahalanobis용으로 래핑
-    train_ds = _SubsetWithNames(train_sub, known)
-    test_id_ds = _SubsetWithNames(test_sub, known)
-    test_holdout_ds = FolderDataset(all_roots, holdout)
+    # ID 학습 = SAMPLE synth(known), ID 테스트 = SAMPLE real(known) — 논문 K=0 시나리오
+    train_ds = SampleDataset(SAMPLE_ROOT, "synth", known)
+    test_id_ds = SampleDataset(SAMPLE_ROOT, "real", known)
+    # near-OOD = 학습 제외된 SAMPLE 클래스 (real)
+    test_holdout_ds = SampleDataset(SAMPLE_ROOT, "real", holdout)
 
     sar_ship = SARShipDataset(SARSHIP_DIR)
     if len(sar_ship) == 0:
         print("[Exp D] SAR-ship not found — using mock OE data.")
         oe_ds: SARDataset = MockSARDataset(n=100, num_classes=1, seed=99)
     else:
-        oe_ds = sar_ship
+        oe_ds = sar_ship  # far-OOD (cross-domain). 논문에선 OE 학습 재료로도 사용
 
     return train_ds, test_id_ds, test_holdout_ds, oe_ds
 
