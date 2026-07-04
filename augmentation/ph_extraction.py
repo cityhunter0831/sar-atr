@@ -259,13 +259,17 @@ def extract_spatial_scattering_centers(
     Grad-CAM과 IoU 비교를 위해 공간 도메인 좌표를 반환.
     extract_scattering_centers()의 FFT 도메인과 달리 (row, col) 픽셀 좌표.
     """
-    from scipy.ndimage import maximum_filter
-    local_max = maximum_filter(amplitude, size=min_distance * 2 + 1)
-    peaks_mask = (amplitude == local_max) & (amplitude > amplitude.mean())
+    from scipy.ndimage import maximum_filter, gaussian_filter
+    # 스페클 노이즈(단일 픽셀 스파이크) 억제 → 공간적으로 일관된 강한 산란체(타겟)만 남김
+    smoothed = gaussian_filter(amplitude, sigma=1.0)
+    local_max = maximum_filter(smoothed, size=min_distance * 2 + 1)
+    # 평균 대신 높은 분위수 임계값 → 배경/노이즈 봉우리 배제, 실제 타겟 산란점에 집중
+    thr = float(np.percentile(smoothed, 90))
+    peaks_mask = (smoothed == local_max) & (smoothed > thr)
     ys, xs = np.where(peaks_mask)
     if len(ys) == 0:
         return []
-    vals = amplitude[ys, xs]
+    vals = smoothed[ys, xs]
     order = np.argsort(vals)[::-1][:k]
     return [(float(ys[i]), float(xs[i])) for i in order]
 
