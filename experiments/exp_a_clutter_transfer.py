@@ -225,6 +225,19 @@ def load_condition(
     ct1_ds   = MSTARImageFolder(DATA_ROOT / "Train_CT_Test_CT",   class_names)
     ct2_ds   = MSTARImageFolder(DATA_ROOT / "Train_CTx2_Test_CT", class_names)
 
+    # T5 진단: 폴더별·클래스별 로드 수 (CTx2 붕괴가 로딩 문제인지 확인)
+    def _counts(ds):
+        c = {cn: 0 for cn in class_names}
+        for _, lbl in getattr(ds, "_samples", []):
+            c[class_names[lbl]] += 1
+        return c
+    if condition == "TrainCTx2+TestCT":  # 한 번만 출력
+        print(f"  [T5 진단] Original: {len(orig_ds)}장 {_counts(orig_ds)}")
+        print(f"  [T5 진단] Train_CT_Test_CT: {len(ct1_ds)}장 {_counts(ct1_ds)}")
+        print(f"  [T5 진단] Train_CTx2_Test_CT: {len(ct2_ds)}장 {_counts(ct2_ds)}")
+        if len(ct2_ds) == 0:
+            print("  ⚠️  CTx2 폴더 0장 로드 — 폴더 구조/클래스명 확인 필요 (붕괴 원인)")
+
     orig_train, orig_test = _split_dataset(orig_ds, train_ratio=0.8, seed=seed)
     _, ct_test            = _split_dataset(ct_or_ds, train_ratio=0.8, seed=seed)
     ct1_train, _          = _split_dataset(ct1_ds,   train_ratio=0.8, seed=seed)
