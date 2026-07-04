@@ -88,6 +88,72 @@ def load_folder(coeff_path: str | Path, ph_path: str | Path) -> dict:
     }
 
 
+# ─── 학습용 Dataset: merge_files 출력(<class>_aug_images.mat) 로드 ────────────
+# 계약(Antigravity가 생성): imgTrain(N×64×64 복소), aziTrain(N×1), elev(N×1).
+# 5클래스 ↔ 시리얼 폴더 매핑 (여러 .mat이 한 클래스로 묶임).
+AUG_FOLDER_TO_CLASS = {
+    "2S1": "2S1",
+    "BMP2_SN_9563": "BMP2", "BMP2_SN_9566": "BMP2", "BMP2_SN_C21": "BMP2",
+    "BTR70_SN_C71": "BTR70",
+    "T72_SN_132": "T72", "T72_SN_812": "T72", "T72_SN_S7": "T72",
+    "ZSU_23_4": "ZSU23",
+}
+AUG_CLASSES = ["2S1", "BMP2", "BTR70", "T72", "ZSU23"]
+
+
+def _mat_stem_to_class(stem: str) -> str | None:
+    """파일명(예: BMP2_SN_9563_aug_images) → 클래스(BMP2)."""
+    folder = stem.replace("_aug_images", "")
+    return AUG_FOLDER_TO_CLASS.get(folder)
+
+
+def load_aug_images(mat_dir: str | Path, class_names=AUG_CLASSES):
+    """<class>_aug_images.mat 들을 읽어 (images[N,64,64] float32 진폭, labels[N]) 반환.
+    imgTrain은 복소 → |·| 진폭. 여러 시리얼 .mat을 클래스로 합침."""
+    mat_dir = Path(mat_dir)
+    cls_idx = {c: i for i, c in enumerate(class_names)}
+    imgs, labels = [], []
+    for p in sorted(mat_dir.glob("*_aug_images.mat")):
+        cls = _mat_stem_to_class(p.stem)
+        if cls is None or cls not in cls_idx:
+            continue
+        m = _load_mat(p)
+        arr = np.asarray(m["imgTrain"])                    # (N,64,64) complex
+        amp = np.abs(arr).astype(np.float32)
+        imgs.append(amp)
+        labels.append(np.full(amp.shape[0], cls_idx[cls], dtype=np.int64))
+    if not imgs:
+        raise FileNotFoundError(f"{mat_dir}에 *_aug_images.mat 없음")
+    return np.concatenate(imgs, 0), np.concatenate(labels, 0)
+
+
+class AugImagesDataset:
+    """SARDataset 호환 — 로컬 MATLAB이 생성한 증강 이미지(.mat)로 학습.
+    core.interfaces.SARDataset을 상속하도록 experiments 쪽에서 감싸 사용."""
+
+    def __init__(self, mat_dir: str | Path, class_names=AUG_CLASSES,
+                 max_per_sample: int | None = None):
+        self._class_names = list(class_names)
+        imgs, labels = load_aug_images(mat_dir, class_names)
+        # 진폭 정규화 [0,1]
+        self._imgs = imgs / (imgs.max() + 1e-8)
+        self._labels = labels
+
+    def __len__(self):
+        return len(self._labels)
+
+    def __getitem__(self, idx):
+        import torch
+        from core.interfaces import SARSample
+        img = torch.from_numpy(self._imgs[idx]).unsqueeze(0)   # [1,64,64]
+        return SARSample(image=img, label=int(self._labels[idx]),
+                         meta={"class_name": self._class_names[self._labels[idx]]})
+
+    @property
+    def class_names(self):
+        return self._class_names
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:
