@@ -164,6 +164,66 @@ class AugImagesDataset(_SARDataset):
         return self._class_names
 
 
+# ─── 테스트 Dataset: <class>_test.mat 로드 (El15° 실측, 동일 전처리) ──────────
+# 계약(Antigravity export_test_data.m): 클래스별 <class>_test.mat, 5개(시리얼 머지됨).
+#   imgTest: (M×64×64) 진폭 또는 복소. 클래스는 파일명(<class>_test)으로 구분.
+
+def _test_stem_to_class(stem: str) -> str | None:
+    return stem.replace("_test", "") if stem.replace("_test", "") in AUG_CLASSES else None
+
+
+def load_test_images(mat_dir: str | Path, class_names=AUG_CLASSES):
+    """<class>_test.mat 들을 읽어 (images[M,64,64] float32 진폭, labels[M]) 반환.
+    imgTest 변수명이 다를 수 있어 후보키로 탐색."""
+    mat_dir = Path(mat_dir)
+    cls_idx = {c: i for i, c in enumerate(class_names)}
+    imgs, labels = [], []
+    for p in sorted(mat_dir.glob("*_test.mat")):
+        cls = _test_stem_to_class(p.stem)
+        if cls is None:
+            continue
+        m = _load_mat(p)
+        # imgTest / img_test / imgTrain 등 후보에서 3D 배열 찾기
+        arr = None
+        for k in ("imgTest", "img_test", "imgTrain", "images", "img"):
+            if k in m:
+                arr = np.asarray(m[k]); break
+        if arr is None:
+            arr = next(np.asarray(v) for k, v in m.items()
+                       if not k.startswith("__") and np.asarray(v).ndim == 3)
+        amp = np.abs(arr).astype(np.float32)               # 복소면 진폭
+        imgs.append(amp)
+        labels.append(np.full(amp.shape[0], cls_idx[cls], dtype=np.int64))
+    if not imgs:
+        raise FileNotFoundError(f"{mat_dir}에 *_test.mat 없음")
+    return np.concatenate(imgs, 0), np.concatenate(labels, 0)
+
+
+class TestImagesDataset(_SARDataset):
+    """El15° 실측 테스트 세트 (<class>_test.mat) → SARDataset."""
+
+    def __init__(self, mat_dir: str | Path, class_names=AUG_CLASSES):
+        self._class_names = list(class_names)
+        imgs, labels = load_test_images(mat_dir, class_names)
+        mx = imgs.reshape(imgs.shape[0], -1).max(1)[:, None, None] + 1e-8
+        self._imgs = (imgs / mx).astype(np.float32)
+        self._labels = labels
+
+    def __len__(self):
+        return len(self._labels)
+
+    def __getitem__(self, idx):
+        import torch
+        from core.interfaces import SARSample
+        img = torch.from_numpy(self._imgs[idx]).unsqueeze(0)
+        return SARSample(image=img, label=int(self._labels[idx]),
+                         meta={"class_name": self._class_names[self._labels[idx]]})
+
+    @property
+    def class_names(self):
+        return self._class_names
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:
