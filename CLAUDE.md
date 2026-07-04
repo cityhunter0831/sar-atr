@@ -101,16 +101,32 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 - 패치 L=30m, 해상도 0.3m → 격자 100×100. f_center=9.6GHz, BW=521MHz, 100 freq bins.
 - 가우시안 기저 D=12(3° 서브개구), σ_G 이미지별 라인서치. Taylor(100,4,−35). 입력 64×64 crop. 외삽 ±6°(η=3).
 
-### precomputed 데이터 상태
-- 저자 OSU Box 링크(`phase_histories.zip`,`recovered_coefficients.zip`) **삭제됨(404)**. 저자(agarwal.270a@osu.edu)에 이메일 요청 보냄(대기).
-- 데이터 오면 → 2단계(FISTA 복원) 건너뛰고 검증에만 사용.
+### ⭐ 현재 노선 = 하이브리드 (로컬 MATLAB + Colab Python) — 이게 실제 파이프라인
+OSU Box precomputed 데이터가 삭제(404)돼 지름길이 막힌 뒤, **원본 MATLAB(Agarwal repo)을 로컬에서 직접 실행**하는 방식으로 전환. Python 포팅(`ph_sparse.py`)은 원리 이해·검증용으로 남기되, **실제 증강 데이터는 MATLAB이 생성**한다.
+
+- **로컬 MATLAB (다른 채팅=Antigravity/Gemini 담당, Agarwal repo)**: stage1(PH)→stage2(희소복원)→stage3(generate)→merge. 가속 완료(장당 26분→18초): 익명함수 슬라이싱 제거, `pagemtimes`, `maxNumCompThreads(1)`, **`gaussWidth=1.0` 고정**(⚠️ 유일한 근사 — 합성품질=정확도에 영향, 대표이미지로 σ_G∈{1,2,3} 잔차비교해 최적 고정 권장).
+- **Colab Python (이 repo=sar-atr, 나 담당)**: MATLAB이 만든 `.mat`을 로드해 SMPL/AT 학습.
+- **데이터 핸드오프 = Google Drive** (두 채팅은 메모리 공유 안 함, `.mat` 파일이 인터페이스).
+
+### 데이터 규격 (MATLAB→Colab 계약)
+- `<class>_aug_images.mat`: `imgTrain`(N×64×64 복소, 샘플당 196장), `aziTrain`, `elev` — El17° 증강 학습셋
+- `<class>_baseline.mat`: 동일 규격 — El17° 원본 few-shot 136장 (증강 전 비교용)
+- `<class>_test.mat`: `imgTest`(M×64×64) — El15° 실측 1913장 (평가용)
+- 파일명: aug는 시리얼명(9개, BMP2_SN_9563 등), baseline/test는 병합명(5개). ZSU_23_4=ZSU23.
+
+### Python 로더 (완료, `augmentation/precomputed_aug.py`)
+- `AugImagesDataset` / `BaselineDataset` / `TestImagesDataset` (모두 `MatImagesDataset(suffix=...)` 래퍼) — `SARDataset` 호환, `train_model()`에 바로 투입.
+- `inspect_mat(path)` — .mat 변수·shape 검사. `_resolve_class()` — 파일명→5클래스 매핑(시리얼/병합/ZSU 혼용 대응, 검증됨).
 
 ### 진척도
-- [x] 1단계 preprocess (`augmentation/ph_sparse.py`) — `image_to_ph()`/`ph_to_image()`. **실데이터 center64 round-trip |corr|=0.99 검증 완료** ✅
-- [ ] 2단계 FISTA 그룹 희소 복원 (`sparse_recover()`) — 진행 중
-- [ ] 3단계 방위각 재합성 (`synthesize()`, ±dθ 외삽)
-- [ ] Colab 검증 (합성 이미지 vs 실이미지, Fig.4 비교)
-- [ ] few-shot 136 → Aug1 증강 적용 → 목표 96.4%
+- [x] 데이터 설계 확정: 5클래스(2S1,BMP2,BTR70,T72,ZSU23), few-shot **136장 정밀분포**(24/32/24/24/32), El17train/El15test, 64×64 crop, AT손실
+- [x] 로컬 MATLAB stage1(PH) 완료, stage2(희소복원) 구동 중(막바지)
+- [x] El15° test 1913장 export 완료 (장수 논문과 일치: 274/587/196/582/274)
+- [x] El17° baseline 136장 export 완료
+- [x] Python 로더 3종 완료·검증
+- [ ] **stage3(generate_aug_images) + merge → `<class>_aug_images.mat` 생성** ← 지금 대기 중
+- [ ] Drive 업로드 → Colab 학습: baseline(목표 56.6%) vs aug(목표 96.4%)
+- (참고) Python 포팅 `ph_sparse.py`: stage1 corr0.99✅, stage2 연산자 자기일관성5/5✅ + λ_max스케일링·sigma_n캘리브(`calibrate_sparse`) — 검증용, 실파이프라인은 MATLAB
 
 ---
 
