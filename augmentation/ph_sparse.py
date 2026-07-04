@@ -230,6 +230,54 @@ def sparse_recover(ph_polar: np.ndarray, depression_deg: float,
     return C, A
 
 
+# ─── 원칙적 파라미터 자동 결정 (감 제거: sigma_n 기준 + σ_G 라인서치) ─────────
+# 논문/MATLAB: sigma_n = √2·‖y‖·10^(−SNR/20), SNR=20dB. 그 잔차까지만 맞추는 제약.
+SNR_DB = 20.0
+SIGMA_N_REL = np.sqrt(2.0) * 10 ** (-SNR_DB / 20.0)   # ≈ 0.1414 (상대 잔차 목표)
+
+
+def _solve_to_sigma_n(ph, dep, sigma_g, grid_side, n_iter, target):
+    """λ를 이분탐색해 잔차가 target(sigma_n)에 가장 근접하는 해를 찾음.
+    감으로 λ 찍는 것 제거 — 노이즈 바닥 기준으로 자동 결정."""
+    lo, hi = 0.0, 0.6                                   # lam_frac 범위
+    best = None
+    for _ in range(7):                                  # 이분탐색 7회
+        mid = 0.5 * (lo + hi)
+        C, A = sparse_recover(ph, dep, sigma_g=sigma_g, lam_frac=mid,
+                              n_iter=n_iter, grid_side=grid_side)
+        res = np.linalg.norm(A.forward(C) - ph) / np.linalg.norm(ph)
+        nnz = int((np.abs(C).sum(1) > 1e-6).sum())
+        if best is None or abs(res - target) < abs(best[3] - target):
+            best = (C, A, mid, res, nnz)
+        # 잔차가 목표보다 크면 λ 낮춰 더 맞추고, 작으면 λ 높여 더 희소하게
+        if res > target:
+            hi = mid
+        else:
+            lo = mid
+    return best                                         # (C, A, lam_frac, res, nnz)
+
+
+def calibrate_sparse(ph, dep, grid_side: int = N_TARGET,
+                     sigma_g_grid=(1.0, 2.0, 3.0, 4.0), n_iter: int = 300):
+    """σ_G 라인서치 + λ→sigma_n 자동. (MATLAB fminbnd+spg_group 대응)
+    소수 대표 이미지로 1회 실행해 좋은 (σ_G, λ_frac)를 찾고, 전체엔 그 값 고정.
+    반환: dict(sigma_g_table, best) — best=(sigma_g, lam_frac, res, nnz).
+    """
+    table = []
+    best = None
+    for sg in sigma_g_grid:
+        C, A, lam, res, nnz = _solve_to_sigma_n(ph, dep, sg, grid_side, n_iter, SIGMA_N_REL)
+        table.append({"sigma_g": sg, "lam_frac": round(lam, 4),
+                      "residual": round(res, 4), "nnz": nnz})
+        # 최적 = sigma_n에 가장 근접하면서 가장 희소
+        key = (abs(res - SIGMA_N_REL), nnz)
+        if best is None or key < best[0]:
+            best = (key, {"sigma_g": sg, "lam_frac": round(lam, 4),
+                          "residual": round(res, 4), "nnz": nnz})
+    return {"target_sigma_n": round(SIGMA_N_REL, 4),
+            "table": table, "best": best[1]}
+
+
 # ─── round-trip 자체검증 (합성 데이터로 파이프라인 sanity check) ──────────────
 if __name__ == "__main__":
     # 실데이터 없이 파이프라인이 도는지 + round-trip 상관도 확인
