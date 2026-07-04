@@ -87,20 +87,33 @@ def _collect_raw_files(
         roots = [roots]
 
     result: dict[str, list[Path]] = {c: [] for c in classes}
+
+    def _match_class(path: Path) -> str | None:
+        """경로의 '폴더명(part)' 단위로 클래스 판별.
+        패키지 루트명(..._T72_BMP2_BTR70_SLICY)에 클래스명이 섞여 있으므로
+        substring이 아니라 part가 alias로 시작하는지로 판별해야 오분류 방지."""
+        parts = path.parts
+        for cls in classes:
+            for alias in CLASS_ALIASES.get(cls, [cls]):
+                al = alias.lower()
+                for part in parts:
+                    pl = part.lower()
+                    # 폴더명이 alias와 정확히 같거나 alias_로 시작 (시리얼 서브폴더 대응)
+                    if pl == al or pl.startswith(al + "_") or pl.startswith(al + "-"):
+                        return cls
+        return None
+
     for root in roots:
         if not root.exists():
             continue
-        for cls in classes:
-            aliases = CLASS_ALIASES.get(cls, [cls])
-            candidates: list[Path] = []
-            for alias in aliases:
-                for p in root.rglob(f"*{alias}*/*"):
-                    if p.is_file() and p.suffix.lstrip(".").isdigit() and len(p.suffix) >= 3:
-                        candidates.append(p)
-            # 중복 제거 (별칭이 겹칠 수 있음)
-            seen: set = set()
-            uniq = [p for p in candidates if not (p in seen or seen.add(p))]
-            result[cls].extend(p for p in uniq if _has_phoenix_header(p))
+        for p in root.rglob("*"):
+            if not (p.is_file() and p.suffix.lstrip(".").isdigit() and len(p.suffix) >= 3):
+                continue
+            cls = _match_class(p)
+            if cls is None:
+                continue
+            if _has_phoenix_header(p):
+                result[cls].append(p)
     return result
 
 
