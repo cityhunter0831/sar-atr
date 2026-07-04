@@ -6,11 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Training Data Augmentation") 재현 및 개선 과제.
 
-**4개 실험:**
-- Exp A: 클러터 전이 Table 4 재현 — gengzhe2015 데이터
-- Exp B: PH 보간 증강 Table 3 재현 — MSTAR Mixed Targets raw binary
-- Exp C: 대비 보정 + Optuna Figure 1 재현 — SAMPLE dataset
-- Exp D: OOD 탐지 (ODIN vs Mahalanobis) — MSTAR 10클래스 + SAR-ship
+> ⭐ **논문 원문 기반 정확한 실험 설계는 `docs/PAPER_SPEC.md` 참조 (권위 문서).**
+> 코드가 논문과 다르면 논문이 정답. 아래는 요약이며, 정확한 표/샘플수/클래스는 PAPER_SPEC.md에 있음.
+
+**4개 실험 (논문 원문 기준):**
+- Exp A: 클러터 전이 Table 4 — 5클래스(2S1,BMP2,BTR70,T72,ZSU23), train El15°/test El17°
+- Exp B: PH 보간 증강 Table 3 — 5클래스, **few-shot**(baseline 136장→Aug 1088장), train El17°/test El15°, **64×64 crop**
+- Exp C: 대비 보정 Figure1/Table6 — SAMPLE 10클래스, K=0(100% synth)→measured, 목표 RN18 94.5%
+- Exp D: OOD 탐지 — **ID=SAMPLE 10클래스**, OE=SAR-ship+MiniSAR, OOD=Holdout+MSTAR-O/P
+
+⚠️ **현재 코드는 논문과 여러 곳이 다름** (특히 Exp B는 few-shot이 아니라 전체 데이터로 학습 중 → 98% 나옴). PAPER_SPEC.md의 "현재 코드와의 차이" 표 참조.
 
 **우리 팀 개선 3가지:**
 1. SSIM 경계 아티팩트 정량화 (`run_boundary_ssim_analysis()` in exp_a)
@@ -142,7 +147,9 @@ SAMPLE 클래스 10개 (소문자): `2s1 bmp2 btr70 m1 m2 m35 m60 m548 t72 zsu23
 
 ## 알려진 설계 결정 및 주의사항
 
-**Exp B 데이터 = CD1 + CD2 둘 다 로드** (`MSTAR_RAW_DIRS`). 표준 MSTAR SOC(train 17° / test 15°) 재현을 위해 필수 — **15°는 CD1에만, 17°는 CD2에만** 있음. 7개 클래스 모두 두 부각을 다 가짐 (진단 교차표로 확인).
+**⚠️ Exp B 재설계 필요 (논문과 불일치):** 현재 코드는 7개 Mixed Targets 클래스 전체 데이터(2049장)로 학습해 98%가 나오지만, **논문 Table 3은 5클래스(2S1,BMP2,BTR70,T72,ZSU23)를 클래스당 24~32장(총 136장)만 학습하는 few-shot 실험**이다 (baseline 56.6% → PH 증강 96.4%). BMP2/BTR70/T72는 Targets 패키지, 2S1/ZSU23는 Mixed Targets에 있음. 자세한 것은 `docs/PAPER_SPEC.md` Exp B 절 참조.
+
+**Exp B 데이터 = CD1 + CD2 둘 다 로드** (`MSTAR_RAW_DIRS`). train 17° / test 15° — **15°는 CD1에만, 17°는 CD2에만** 있음.
 
 **Exp B train/test split:** `_split_train_test()` 사용 — **헤더 부각 기반 cross-depression split**.
 헤더 `DesiredDepression` 필드에서 부각을 읽어 전역 상위 2개 부각을 train/test로 분리 (`_depression_angle()`).

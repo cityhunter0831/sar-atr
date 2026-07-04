@@ -1,20 +1,17 @@
 """
-Exp B — Phase History Interpolation Augmentation (논문 Section 2.1 재현)
+Exp B — Phase History Interpolation Augmentation (논문 Section 2.1, Table 3)
 
-논문 Table 3 재현:
-  조건                | SMPL 5-class acc
-  원본만 학습          | ~56.6%
-  PH 보간 증강 추가   | ~96.6%
+⚠️ 현재 구현은 논문과 불일치 — 재설계 대상. 정확한 설계는 docs/PAPER_SPEC.md 참조.
 
-방법:
-  1. Mixed Targets CD2에서 클래스별 이미지 pair 구성
-  2. IFFT → PH 도메인 선형 보간 → FFT → 합성 이미지 생성
-  3. 원본 + 합성 이미지로 SMPL 학습 후 테스트
+논문 Table 3 (원문): 5클래스(2S1,BMP2,BTR70,T72,ZSU23), train El17°/test El15°,
+  baseline = 클래스당 24~32장(총 136장, few-shot) → SMPL/AT 56.6%
+  PH 보간 증강(Aug1, 1088장) → 96.4%. 입력 64×64 crop. 손실 AT(ε=2)/LSM.
+  핵심: baseline이 낮은 이유는 부각 차이가 아니라 "학습 샘플이 136장뿐"이기 때문.
 
-우리 팀 개선 #3 (Grad-CAM 산란점 일치도 검증):
-  run_gradcam_analysis() 참고
+현재 코드: 7개 Mixed Targets 클래스 전체(2049장) 학습 → 98% (few-shot 아님).
+  → 논문 재현하려면 5클래스 + 136장 baseline + azimuth 보간 + 64×64로 수정 필요.
 
-데이터: MSTAR Mixed Targets CD2 (Phoenix 헤더 확인됨)
+우리 팀 개선 #3 (Grad-CAM 산란점 일치도 검증): run_gradcam_analysis() 참고
 """
 from __future__ import annotations
 
