@@ -89,42 +89,59 @@ def load_folder(coeff_path: str | Path, ph_path: str | Path) -> dict:
 
 
 # ─── 학습용 Dataset: merge_files 출력(<class>_aug_images.mat) 로드 ────────────
-# 계약(Antigravity가 생성): imgTrain(N×64×64 복소), aziTrain(N×1), elev(N×1).
-# 5클래스 ↔ 시리얼 폴더 매핑 (여러 .mat이 한 클래스로 묶임).
-AUG_FOLDER_TO_CLASS = {
-    "2S1": "2S1",
-    "BMP2_SN_9563": "BMP2", "BMP2_SN_9566": "BMP2", "BMP2_SN_C21": "BMP2",
-    "BTR70_SN_C71": "BTR70",
-    "T72_SN_132": "T72", "T72_SN_812": "T72", "T72_SN_S7": "T72",
-    "ZSU_23_4": "ZSU23",
-}
+# 5클래스. 파일명이 시리얼(BMP2_SN_9563)일 수도, 병합명(BMP2)일 수도, ZSU_23_4/ZSU23 혼용.
 AUG_CLASSES = ["2S1", "BMP2", "BTR70", "T72", "ZSU23"]
+_SUFFIXES = ("_aug_images", "_baseline", "_test")
 
 
-def _mat_stem_to_class(stem: str) -> str | None:
-    """파일명(예: BMP2_SN_9563_aug_images) → 클래스(BMP2)."""
-    folder = stem.replace("_aug_images", "")
-    return AUG_FOLDER_TO_CLASS.get(folder)
+def _resolve_class(stem: str) -> str | None:
+    """파일명 stem → 5클래스 중 하나. 시리얼명·병합명·ZSU 표기 혼용 모두 대응."""
+    s = stem
+    for suf in _SUFFIXES:
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+            break
+    sl = s.lower()
+    # ZSU 표기 통일 (ZSU_23_4 / ZSU23 / zsu23 …)
+    if sl.startswith("zsu"):
+        return "ZSU23"
+    for c in ("2S1", "BMP2", "BTR70", "T72"):
+        if sl.startswith(c.lower()):
+            return c
+    return None
 
 
-def load_aug_images(mat_dir: str | Path, class_names=AUG_CLASSES):
-    """<class>_aug_images.mat 들을 읽어 (images[N,64,64] float32 진폭, labels[N]) 반환.
-    imgTrain은 복소 → |·| 진폭. 여러 시리얼 .mat을 클래스로 합침."""
+def _find_3d(m: dict) -> np.ndarray:
+    """.mat에서 이미지 3D 배열 찾기 (imgTrain/imgTest/... 변수명 무관)."""
+    for k in ("imgTrain", "imgTest", "img_test", "images", "img"):
+        if k in m:
+            return np.asarray(m[k])
+    for k, v in m.items():
+        if not k.startswith("__") and np.asarray(v).ndim == 3:
+            return np.asarray(v)
+    raise KeyError("3D 이미지 배열을 못 찾음")
+
+
+def load_mat_images(mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES):
+    """<*>{suffix}.mat 들을 읽어 (images[N,64,64] float32 진폭, labels[N]) 반환.
+    suffix: '_aug_images' | '_baseline' | '_test'. 복소면 |·| 진폭. 시리얼→클래스 자동 병합."""
     mat_dir = Path(mat_dir)
     cls_idx = {c: i for i, c in enumerate(class_names)}
     imgs, labels = [], []
-    for p in sorted(mat_dir.glob("*_aug_images.mat")):
-        cls = _mat_stem_to_class(p.stem)
+    for p in sorted(mat_dir.glob(f"*{suffix}.mat")):
+        cls = _resolve_class(p.stem)
         if cls is None or cls not in cls_idx:
             continue
-        m = _load_mat(p)
-        arr = np.asarray(m["imgTrain"])                    # (N,64,64) complex
-        amp = np.abs(arr).astype(np.float32)
+        amp = np.abs(_find_3d(_load_mat(p))).astype(np.float32)
         imgs.append(amp)
         labels.append(np.full(amp.shape[0], cls_idx[cls], dtype=np.int64))
     if not imgs:
-        raise FileNotFoundError(f"{mat_dir}에 *_aug_images.mat 없음")
+        raise FileNotFoundError(f"{mat_dir}에 *{suffix}.mat 없음")
     return np.concatenate(imgs, 0), np.concatenate(labels, 0)
+
+
+def load_aug_images(mat_dir, class_names=AUG_CLASSES):
+    return load_mat_images(mat_dir, "_aug_images", class_names)
 
 
 try:
@@ -134,19 +151,16 @@ except Exception:  # core 미로딩 환경(단독 검사)에서도 import 되게
     _SARSample = None
 
 
-class AugImagesDataset(_SARDataset):
-    """SARDataset — 로컬 MATLAB이 생성한 증강 이미지(.mat)로 few-shot 학습.
-    `train_model(model, AugImagesDataset(...), test_ds, cfg)`로 바로 투입 가능."""
+class MatImagesDataset(_SARDataset):
+    """SARDataset — MATLAB 생성 .mat 이미지 세트. suffix로 용도 구분:
+      '_aug_images' (El17 증강 학습), '_baseline' (El17 원본 136), '_test' (El15 실측 평가).
+    이미지별 [0,1] 정규화. `train_model(model, ds, test_ds, cfg)`에 바로 투입."""
 
-    def __init__(self, mat_dir: str | Path, class_names=AUG_CLASSES,
-                 per_image_norm: bool = True):
+    def __init__(self, mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES):
         self._class_names = list(class_names)
-        imgs, labels = load_aug_images(mat_dir, class_names)
-        if per_image_norm:                                     # 이미지별 [0,1] 정규화
-            mx = imgs.reshape(imgs.shape[0], -1).max(1)[:, None, None] + 1e-8
-            self._imgs = (imgs / mx).astype(np.float32)
-        else:
-            self._imgs = (imgs / (imgs.max() + 1e-8)).astype(np.float32)
+        imgs, labels = load_mat_images(mat_dir, suffix, class_names)
+        mx = imgs.reshape(imgs.shape[0], -1).max(1)[:, None, None] + 1e-8
+        self._imgs = (imgs / mx).astype(np.float32)
         self._labels = labels
 
     def __len__(self):
@@ -164,64 +178,20 @@ class AugImagesDataset(_SARDataset):
         return self._class_names
 
 
-# ─── 테스트 Dataset: <class>_test.mat 로드 (El15° 실측, 동일 전처리) ──────────
-# 계약(Antigravity export_test_data.m): 클래스별 <class>_test.mat, 5개(시리얼 머지됨).
-#   imgTest: (M×64×64) 진폭 또는 복소. 클래스는 파일명(<class>_test)으로 구분.
-
-def _test_stem_to_class(stem: str) -> str | None:
-    return stem.replace("_test", "") if stem.replace("_test", "") in AUG_CLASSES else None
+# 편의 래퍼 (용도별)
+def AugImagesDataset(mat_dir, class_names=AUG_CLASSES):
+    """El17° PH 증강 학습셋 (<class>_aug_images.mat)."""
+    return MatImagesDataset(mat_dir, "_aug_images", class_names)
 
 
-def load_test_images(mat_dir: str | Path, class_names=AUG_CLASSES):
-    """<class>_test.mat 들을 읽어 (images[M,64,64] float32 진폭, labels[M]) 반환.
-    imgTest 변수명이 다를 수 있어 후보키로 탐색."""
-    mat_dir = Path(mat_dir)
-    cls_idx = {c: i for i, c in enumerate(class_names)}
-    imgs, labels = [], []
-    for p in sorted(mat_dir.glob("*_test.mat")):
-        cls = _test_stem_to_class(p.stem)
-        if cls is None:
-            continue
-        m = _load_mat(p)
-        # imgTest / img_test / imgTrain 등 후보에서 3D 배열 찾기
-        arr = None
-        for k in ("imgTest", "img_test", "imgTrain", "images", "img"):
-            if k in m:
-                arr = np.asarray(m[k]); break
-        if arr is None:
-            arr = next(np.asarray(v) for k, v in m.items()
-                       if not k.startswith("__") and np.asarray(v).ndim == 3)
-        amp = np.abs(arr).astype(np.float32)               # 복소면 진폭
-        imgs.append(amp)
-        labels.append(np.full(amp.shape[0], cls_idx[cls], dtype=np.int64))
-    if not imgs:
-        raise FileNotFoundError(f"{mat_dir}에 *_test.mat 없음")
-    return np.concatenate(imgs, 0), np.concatenate(labels, 0)
+def BaselineDataset(mat_dir, class_names=AUG_CLASSES):
+    """El17° few-shot 원본 baseline (136장, <class>_baseline.mat)."""
+    return MatImagesDataset(mat_dir, "_baseline", class_names)
 
 
-class TestImagesDataset(_SARDataset):
-    """El15° 실측 테스트 세트 (<class>_test.mat) → SARDataset."""
-
-    def __init__(self, mat_dir: str | Path, class_names=AUG_CLASSES):
-        self._class_names = list(class_names)
-        imgs, labels = load_test_images(mat_dir, class_names)
-        mx = imgs.reshape(imgs.shape[0], -1).max(1)[:, None, None] + 1e-8
-        self._imgs = (imgs / mx).astype(np.float32)
-        self._labels = labels
-
-    def __len__(self):
-        return len(self._labels)
-
-    def __getitem__(self, idx):
-        import torch
-        from core.interfaces import SARSample
-        img = torch.from_numpy(self._imgs[idx]).unsqueeze(0)
-        return SARSample(image=img, label=int(self._labels[idx]),
-                         meta={"class_name": self._class_names[self._labels[idx]]})
-
-    @property
-    def class_names(self):
-        return self._class_names
+def TestImagesDataset(mat_dir, class_names=AUG_CLASSES):
+    """El15° 실측 테스트셋 (1913장, <class>_test.mat)."""
+    return MatImagesDataset(mat_dir, "_test", class_names)
 
 
 if __name__ == "__main__":
