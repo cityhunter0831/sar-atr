@@ -93,16 +93,15 @@ def read_mstar_raw(path: str | Path) -> np.ndarray:
     n_cols = int(header.get("NumberOfColumns", header.get("numcols", 128)))
     offset = _header_byte_length(path)
 
-    n_complex = n_rows * n_cols
+    n = n_rows * n_cols
     with open(path, "rb") as f:
         f.seek(offset)
-        raw = f.read(n_complex * 8)  # 2 × float32 per sample
+        raw = f.read(n * 8)  # 진폭 블록 + 위상 블록, 각 n개 float32
 
-    # MSTAR stores real then imaginary, big-endian
-    vals = struct.unpack(f">{n_complex * 2}f", raw)
-    arr = np.array(vals, dtype=np.float32).reshape(n_complex, 2)
-    complex_img = arr[:, 0] + 1j * arr[:, 1]
-    amplitude = np.abs(complex_img).reshape(n_rows, n_cols)
+    # MSTAR 표준 포맷: [진폭 n개][위상 n개] (블록 저장, big-endian).
+    # real+imag 교차가 아님 — 교차로 읽으면 이미지가 상하로 갈림(위=진폭 오독, 아래=위상 노이즈).
+    vals = np.frombuffer(raw, dtype=">f4").astype(np.float32)
+    amplitude = vals[:n].reshape(n_rows, n_cols)   # 첫 블록이 곧 진폭
     return amplitude
 
 
@@ -119,14 +118,16 @@ def read_mstar_complex(path: str | Path) -> np.ndarray:
     n_cols = int(header.get("NumberOfColumns", header.get("numcols", 128)))
     offset = _header_byte_length(path)
 
-    n_complex = n_rows * n_cols
+    n = n_rows * n_cols
     with open(path, "rb") as f:
         f.seek(offset)
-        raw = f.read(n_complex * 8)
+        raw = f.read(n * 8)
 
-    vals = struct.unpack(f">{n_complex * 2}f", raw)
-    arr = np.array(vals, dtype=np.float32).reshape(n_complex, 2)
-    return (arr[:, 0] + 1j * arr[:, 1]).reshape(n_rows, n_cols)
+    # MSTAR 표준: [진폭 블록][위상 블록] → complex = 진폭 · exp(i·위상)
+    vals = np.frombuffer(raw, dtype=">f4").astype(np.float32)
+    amplitude = vals[:n]
+    phase = vals[n:2 * n]
+    return (amplitude * np.exp(1j * phase)).reshape(n_rows, n_cols)
 
 
 def interpolate_phase_history(
