@@ -17,10 +17,52 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 
 ⚠️ **현재 코드는 논문과 여러 곳이 다름** (특히 Exp B는 few-shot이 아니라 전체 데이터로 학습 중 → 98% 나옴). PAPER_SPEC.md의 "현재 코드와의 차이" 표 참조.
 
-**우리 팀 개선 3가지:**
-1. SSIM 경계 아티팩트 정량화 (`run_boundary_ssim_analysis()` in exp_a)
-2. Adam 옵티마이저 비교
-3. Grad-CAM × 산란점 IoU 검증 (`run_gradcam_analysis()` in exp_b)
+**우리 팀 개선 3가지 (논문에 없는 추가 기여):**
+1. SSIM 경계 아티팩트 정량화 (`run_boundary_ssim_analysis()` in exp_a) — 클러터 전이 품질 정량화
+2. 옵티마이저 비교 (ADAM vs SGD) — 논문은 ADAM 고정
+3. Grad-CAM × 산란점 IoU 검증 (`run_gradcam_analysis()` in exp_b) — 모델이 물리적 산란점을 보는지 검증
+   (부가: Exp C에 Optuna 하이퍼파라미터 자동 탐색 — 논문은 대비 레벨 3개 고정)
+
+---
+
+## 🎯 프로젝트 지향점 (항상 참고)
+
+**우리가 하려는 것 = ① 논문 4개 실험 충실 재현 + ② 우리 팀 개선 3가지 추가.**
+
+원칙:
+- **논문이 정답이다.** 코드가 논문과 다르면 논문에 맞춘다. 정확한 표/샘플수/클래스/입력크기는 `docs/PAPER_SPEC.md`(권위 문서) 참조.
+- 논문과 **의도적으로 다르게 가는 경우** = 데이터 가용성 등 불가피한 이유가 있을 때만. 그 이유를 아래 표에 남긴다.
+- 논문과 **의도치 않게 어긋난 것** = 버그/오해 → 트러블슈팅 목록에서 수정한다.
+
+### 논문 실험 요약 (headline, 상세는 PAPER_SPEC.md)
+| Exp | 논문 실험 | 데이터 | headline 수치 |
+|---|---|---|---|
+| A | Clutter transfer (Table 4) | MSTAR 5클래스, train El15/test El17 | 원본→CT 급락(SMPL7 38.6%) → CTx2 회복(96.0%) |
+| B | PH 보간 few-shot (Table 3) | MSTAR 5클래스, train El17/test El15, **136장→1088장** | SMPL/AT **56.6%→96.4%** |
+| C | Contrast 증강 (Table 6) | SAMPLE 10클래스, K=0 synth→measured | RN18 91.9%→**94.5%** |
+| D | OOD 탐지 (Figure 9) | ID=SAMPLE, OE=SAR-ship+MiniSAR, OOD=Holdout+MSTAR-O/P | Maha가 대체로 최고 |
+
+### 의도적 설계 변경 (근거 있음 — 유지)
+| 항목 | 논문 | 우리 | 이유 |
+|---|---|---|---|
+| Exp D OE 데이터 | MiniSAR + SAR-ship | **SAR-ship만** | MiniSAR은 비공개(논문 저자 자체 개발) → 공개 SAR-ship로 대체 |
+| Exp C 하이퍼파라미터 | 대비 레벨 3개 고정 | **Optuna 자동 탐색** | 우리 팀 개선 — 재현성·객관성 강화 |
+| 개선 #1 SSIM | (없음) | 추가 | 클러터 전이 경계 품질 정량화 (우리 기여) |
+| 개선 #2 옵티마이저 | ADAM 고정 | ADAM vs SGD | 증강 효과의 옵티마이저 의존성 분석 (우리 기여) |
+| 개선 #3 Grad-CAM | (없음) | 추가 | 물리적 해석가능성 검증 (우리 기여) |
+
+### 🔧 트러블슈팅 (논문과 어긋남 = 수정 대상, 우선순위 순)
+| # | 실험 | 현재 문제 | 논문 정답 | 상태 |
+|---|---|---|---|---|
+| T1 | Exp B | 7클래스 전체(2049장) 학습 → 98% | 5클래스 **few-shot 136장** baseline → 56.6% | 🔴 재설계 |
+| T2 | Exp B | 128×128 resize | **64×64 center-crop** | 🔴 |
+| T3 | Exp B | CrossEntropy 기본 손실 | **AT(ε=2) / LSM(lblsm=0.1)** | 🔴 |
+| T4 | Exp B | 인접 파일 alpha 보간 | **azimuth 이웃(±1°) PH 보간** | 🔴 |
+| T5 | Exp A | TrainCTx2 붕괴(39%) | 회복(**96.0%**) — 2배 증강 버그 | 🔴 |
+| T6 | Exp D | ID=MSTAR, SAR-ship=OOD테스트 | **ID=SAMPLE**, SAR-ship=**OE 학습** | 🟠 재설계 |
+| T7 | Exp C | 목표치 불명확 | K=0에서 **RN18 94.5%** 명시 | 🟡 |
+| ✅ | Exp B | ~~파일 포맷 [진폭][위상] 오독~~ | 고침 (BUG-X4) | 완료 |
+| ✅ | 공통 | ~~Taylor sll 부호, 헤더 오프셋 등~~ | 고침 (BUG-X1~X3) | 완료 |
 
 ---
 
@@ -86,8 +128,9 @@ EvalResult: accuracy, confusion_matrix, per_class_accuracy,
 
 ### 데이터 흐름
 ```
-raw MSTAR binary → read_mstar_complex() → interpolate_phase_history() → amplitude_to_tensor()
-PNG/JPEG images  → PIL.Image → numpy → torch.Tensor [1,128,128]
+raw MSTAR binary → read_mstar_raw()([진폭 블록]) / read_mstar_complex()(진폭·exp(i·위상))
+                 → interpolate_phase_history() → amplitude_to_tensor()
+PNG/JPEG images  → PIL.Image → numpy → torch.Tensor [1,H,W] (리사이즈)
 ```
 
 ### 학습 파이프라인
@@ -109,12 +152,15 @@ PNG/JPEG images  → PIL.Image → numpy → torch.Tensor [1,128,128]
 ## MSTAR 파일 형식 (중요)
 
 Phoenix binary format (`augmentation/ph_extraction.py`):
-- 파일 = [ASCII 헤더: `PhoenixHeaderLength` 바이트] + [SAR complex float32 데이터]
+- 파일 = [ASCII 헤더: `PhoenixHeaderLength` 바이트] + [SAR 데이터]
 - **`PhoenixSigSize` = 파일 전체 크기** (extra block이 아님 — 오해하기 쉬운 필드)
 - SAR 데이터 오프셋 = `PhoenixHeaderLength` 값만 사용
-- 데이터: big-endian float32, real+imag 교차 저장
+- ⚠️ **데이터 = [진폭 블록][위상 블록]** (BUG-X4): big-endian float32, 픽셀당 2개.
+  real+imag 교차가 **아님**. 교차로 읽으면 이미지가 상하로 갈림(위=진폭 오독, 아래=위상 노이즈).
+  진폭 = 첫 블록, complex = 진폭·exp(i·위상).
 - **부각(앙각)은 헤더의 `DesiredDepression`/`MeasuredDepression` 필드에서 읽어야 함** — Mixed Targets의 파일 확장자(`.000`/`.001` 등)는 앙각이 아니라 단순 일련번호. (Targets chips는 `.017`/`.015` 확장자가 앙각이지만 Mixed Targets는 다름)
-- Mixed Targets CD2는 158×158 이미지 → `amplitude_to_tensor()`에서 128×128로 리사이즈
+- 이미지 크기 다양(128×129, 158×158 등) → `amplitude_to_tensor()`에서 리사이즈.
+  ⚠️ 단 **Exp B 논문 재현 시 입력은 64×64 center-crop** (PAPER_SPEC 참조)
 
 ---
 
