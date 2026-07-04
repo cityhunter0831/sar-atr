@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Training Data Augmentation") 재현 및 개선 과제.
 
-> ⭐ **논문 원문 기반 정확한 실험 설계는 `docs/PAPER_SPEC.md` 참조 (권위 문서).**
+> ⭐ **참조 문서**: `docs/PAPER_SPEC.md`(논문 원문 표·수치, 권위 문서) · `docs/DATASET_METHOD.md`(실험별 데이터셋·구현방법·대체 정당성)
 > 코드가 논문과 다르면 논문이 정답. 아래는 요약이며, 정확한 표/샘플수/클래스는 PAPER_SPEC.md에 있음.
 
 **4개 실험 (논문 원문 기준):**
