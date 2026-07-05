@@ -21,20 +21,24 @@ Geng et al. 2023 SAR-ATR 논문 4개 실험 재현 + 우리 팀 개선 3개. 코
 - ✅ `gaussWidth=1.0` 편차 검증 완료: 2S1에서 σ_G=1(9419.6) vs σ_G=2(9419.4) 잔차차이 **0.002%** → σ_G 민감도 낮음 정량 확인. **1.0 고정 확정, 재복원 불필요.** (blind 아니라 검증 후 고정 → 발표 방어 가능)
 
 ### 데이터 3종 (`.mat`, Drive 통해 전달)
-- `<class>_aug_images.mat`: El17 증강 학습(imgTrain N×64×64 복소, 샘플당196장) — **🔴 아직 생성 중(stage3 대기)**
+- `<class>_aug_images.mat`: El17 증강 학습(imgTrain N×64×64 복소, 샘플당196장, v7.3/HDF5) — **🔄 버그 수정 후 재생성 중**
 - `<class>_baseline.mat`: El17 원본 136장 — ✅ 완료
 - `<class>_test.mat`: El15 실측 1913장(imgTest) — ✅ 완료
-- 5클래스=2S1,BMP2,BTR70,T72,ZSU23. few-shot 분포 24/32/24/24/32=136.
+- 5클래스=2S1,BMP2,BTR70,T72,ZSU23. few-shot 분포 24/32/24/24/32=136. aug 총 26,656장(136×196), test 총 1,913장(274/587/196/582/274).
+
+### 🔴 발견·수정한 버그 (이번 세션 핵심)
+1. **v7.3 로더**: `.mat`가 MATLAB v7.3(HDF5)로 저장돼 `scipy.io.loadmat`이 `NotImplementedError`. → `precomputed_aug.py` `_load_mat`에 h5py 폴백 추가(F-order 전치, complex compound dtype real+imag 처리). 커밋 `0416cf2`.
+2. **인덱싱 버그**(`generate_aug_images.m`): `x_recovered`는 few-shot 압축순서(1..N)인데 전체 PH 배열(`arr_img_fft_polar`/`depression`/`arr_azi`)을 같은 idxTrain으로 접근 → 다른 칩 신호가 잔차에 섞임(상관 0.18). `selected_idx=RC.selected_indices(idxTrain)` 매핑으로 수정 → 상관 0.997. MATLAB 파일은 `matlab_pipeline/`에 백업.
 
 ### Python 쪽 준비 (완료)
 `augmentation/precomputed_aug.py`: `AugImagesDataset/BaselineDataset/TestImagesDataset`(SARDataset 호환), `inspect_mat`, `_resolve_class`(파일명 매핑 검증됨).
 
 ### 다음에 할 일 (순서)
-1. ✅ stage2 계수 136장 완공, σ_G=1.0 확정(재복원 불필요)
-2. 🔄 로컬 MATLAB: stage3(`generate_aug_images.m`) **구동 중** → merge_files(루프 자동화됨) → `<serial>_aug_images.mat` 9개 → Drive 업로드
-3. Colab에서 `inspect_mat`로 변수명·shape 검증 (특히 test의 imgTest 변수명 확인)
-4. 최종 학습 셀(아래) 실행 → baseline 56.6% vs aug 96.4% 재현
-5. 되면 REPORT.md 수치 갱신, Grad-CAM(개선#3)을 이 완전판 모델로 재실행
+1. ✅ stage2 계수 136장 완공, σ_G=1.0 확정 / ✅ v7.3 로더·인덱싱 버그 수정
+2. 🔄 로컬 MATLAB: 버그 수정본으로 stage3+merge **재생성 중** → `<serial>_aug_images.mat` 9개 → Drive **덮어쓰기 업로드**
+3. Colab에서 60 epoch 재학습 → baseline 52% 확인됨 / aug 목표 96.4% 재판정
+4. aug가 여전히 낮으면: (a)클래스별 정확도 확인(BMP2/T72 tracked vehicle 혼동 주시) (b)epoch 증가 (c)σ_G를 BMP2/T72에도 검증
+5. 되면 REPORT.md aug 수치 확정, Grad-CAM(개선#3)을 완전판 모델로 재실행
 
 ### 최종 학습 셀 (데이터 준비되면)
 ```python
