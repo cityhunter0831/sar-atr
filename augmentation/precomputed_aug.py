@@ -145,9 +145,10 @@ def _find_3d(m: dict) -> np.ndarray:
     raise KeyError("3D 이미지 배열을 못 찾음")
 
 
-def load_mat_images(mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES, log_scale=False):
-    """<*>{suffix}.mat 들을 읽어 (images[N,64,64] float32 진폭, labels[N]) 반환.
-    suffix: '_aug_images' | '_baseline' | '_test'. 복소면 |·| 진폭. 시리얼→클래스 자동 병합."""
+def load_mat_images(mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES):
+    """<*>{suffix}.mat 들을 읽어 (images[N,64,64] float32 raw 진폭, labels[N]) 반환.
+    suffix: '_aug_images' | '_baseline' | '_test'. 복소면 |·| 진폭. 시리얼→클래스 자동 병합.
+    정규화(선형/dB)는 호출측 `_normalize_amplitude`에서 일괄 처리 (여기선 raw만)."""
     mat_dir = Path(mat_dir)
     cls_idx = {c: i for i, c in enumerate(class_names)}
     imgs, labels = [], []
@@ -156,8 +157,6 @@ def load_mat_images(mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES, l
         if cls is None or cls not in cls_idx:
             continue
         amp = np.abs(_find_3d(_load_mat(p))).astype(np.float32)
-        if log_scale:
-            amp = 20.0 * np.log10(amp + 1e-5)
         imgs.append(amp)
         labels.append(np.full(amp.shape[0], cls_idx[cls], dtype=np.int64))
     if not imgs:
@@ -165,8 +164,8 @@ def load_mat_images(mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES, l
     return np.concatenate(imgs, 0), np.concatenate(labels, 0)
 
 
-def load_aug_images(mat_dir, class_names=AUG_CLASSES, log_scale=False):
-    return load_mat_images(mat_dir, "_aug_images", class_names, log_scale)
+def load_aug_images(mat_dir, class_names=AUG_CLASSES):
+    return load_mat_images(mat_dir, "_aug_images", class_names)
 
 
 try:
@@ -176,17 +175,31 @@ except Exception:  # core 미로딩 환경(단독 검사)에서도 import 되게
     _SARSample = None
 
 
+def _normalize_amplitude(imgs: np.ndarray, log_scale: bool, dyn_range_db: float) -> np.ndarray:
+    """진폭 이미지 → [0,1]. log_scale=True면 dB 압축(동적범위 dyn_range_db) 후 정규화.
+
+    선형 진폭은 소수 밝은 산란점에만 값이 몰려 미세구조가 소실되고, 합성(smooth)-실측(speckle)
+    도메인 갭이 큼. dB 압축은 speckle floor를 끌어올려 구조를 살리고 도메인 갭을 줄임."""
+    amp = imgs.astype(np.float32)
+    mx = amp.reshape(amp.shape[0], -1).max(1)[:, None, None] + 1e-8
+    amp = amp / mx                                            # per-image [0,1]
+    if log_scale:
+        db = 20.0 * np.log10(np.maximum(amp, 1e-6))          # (-120, 0] dB
+        db = np.clip(db, -dyn_range_db, 0.0)
+        amp = (db + dyn_range_db) / dyn_range_db             # [0,1]
+    return amp.astype(np.float32)
+
+
 class MatImagesDataset(_SARDataset):
     """SARDataset — MATLAB 생성 .mat 이미지 세트. suffix로 용도 구분:
       '_aug_images' (El17 증강 학습), '_baseline' (El17 원본 136), '_test' (El15 실측 평가).
-    이미지별 [0,1] 정규화. `train_model(model, ds, test_ds, cfg)`에 바로 투입."""
+    이미지별 [0,1] 정규화. `log_scale=True`면 dB 동적범위 압축(기본 35dB). train/test 동일 설정 필수."""
 
-    def __init__(self, mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES, log_scale=False):
+    def __init__(self, mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES,
+                 log_scale: bool = False, dyn_range_db: float = 35.0):
         self._class_names = list(class_names)
-        imgs, labels = load_mat_images(mat_dir, suffix, class_names, log_scale)
-        mx = imgs.reshape(imgs.shape[0], -1).max(1)[:, None, None] + 1e-8
-        mn = imgs.reshape(imgs.shape[0], -1).min(1)[:, None, None]
-        self._imgs = ((imgs - mn) / (mx - mn + 1e-8)).astype(np.float32)
+        imgs, labels = load_mat_images(mat_dir, suffix, class_names)
+        self._imgs = _normalize_amplitude(imgs, log_scale, dyn_range_db)
         self._labels = labels
 
     def __len__(self):
@@ -204,20 +217,20 @@ class MatImagesDataset(_SARDataset):
         return self._class_names
 
 
-# 편의 래퍼 (용도별)
-def AugImagesDataset(mat_dir, class_names=AUG_CLASSES, log_scale=False):
+# 편의 래퍼 (용도별). log_scale/dyn_range_db는 train·test 동일하게 줄 것.
+def AugImagesDataset(mat_dir, class_names=AUG_CLASSES, log_scale=False, dyn_range_db=35.0):
     """El17° PH 증강 학습셋 (<class>_aug_images.mat)."""
-    return MatImagesDataset(mat_dir, "_aug_images", class_names, log_scale)
+    return MatImagesDataset(mat_dir, "_aug_images", class_names, log_scale, dyn_range_db)
 
 
-def BaselineDataset(mat_dir, class_names=AUG_CLASSES, log_scale=False):
+def BaselineDataset(mat_dir, class_names=AUG_CLASSES, log_scale=False, dyn_range_db=35.0):
     """El17° few-shot 원본 baseline (136장, <class>_baseline.mat)."""
-    return MatImagesDataset(mat_dir, "_baseline", class_names, log_scale)
+    return MatImagesDataset(mat_dir, "_baseline", class_names, log_scale, dyn_range_db)
 
 
-def TestImagesDataset(mat_dir, class_names=AUG_CLASSES, log_scale=False):
+def TestImagesDataset(mat_dir, class_names=AUG_CLASSES, log_scale=False, dyn_range_db=35.0):
     """El15° 실측 테스트셋 (1913장, <class>_test.mat)."""
-    return MatImagesDataset(mat_dir, "_test", class_names, log_scale)
+    return MatImagesDataset(mat_dir, "_test", class_names, log_scale, dyn_range_db)
 
 
 if __name__ == "__main__":
