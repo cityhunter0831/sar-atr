@@ -273,17 +273,35 @@ def extract_spatial_scattering_centers(
 
     Grad-CAM과 IoU 비교를 위해 공간 도메인 좌표를 반환.
     extract_scattering_centers()의 FFT 도메인과 달리 (row, col) 픽셀 좌표.
+
+    타겟 영역 제한: 밝은 픽셀을 형태학적으로 연결(dilation)해 연결성분을 만들고,
+    총 강도가 지배적인 성분(=타겟 덩어리)만 남긴다. 모서리에 고립된 배경 스페클
+    봉우리를 산란점으로 오검출하던 문제를 제거 → XAI IoU 지표 정확도 향상.
     """
-    from scipy.ndimage import maximum_filter, gaussian_filter
+    from scipy.ndimage import (maximum_filter, gaussian_filter,
+                               label, binary_dilation)
     # 스페클 노이즈(단일 픽셀 스파이크) 억제 → 공간적으로 일관된 강한 산란체(타겟)만 남김
     smoothed = gaussian_filter(amplitude, sigma=1.0)
-    local_max = maximum_filter(smoothed, size=min_distance * 2 + 1)
-    # 평균 대신 높은 분위수 임계값 → 배경/노이즈 봉우리 배제, 실제 타겟 산란점에 집중
-    thr = float(np.percentile(smoothed, 90))
-    peaks_mask = (smoothed == local_max) & (smoothed > thr)
-    ys, xs = np.where(peaks_mask)
-    if len(ys) == 0:
+    thr = float(np.percentile(smoothed, 92))
+    fg = smoothed > thr
+    if not fg.any():
         return []
+    # 인접 밝은 픽셀을 연결해 타겟 덩어리 형성 (고립된 배경 스페클은 작은 성분으로 분리)
+    lab, n = label(binary_dilation(fg, iterations=2))
+    if n == 0:
+        return []
+    # 성분별 총 강도 → 지배 성분(타겟) 및 그에 준하는 성분만 유지, 약한 배경 성분 배제
+    sums = np.array([smoothed[lab == i].sum() for i in range(1, n + 1)])
+    areas = np.array([(lab == i).sum() for i in range(1, n + 1)])
+    keep = [i + 1 for i in range(n)
+            if sums[i] >= 0.2 * sums.max() and areas[i] >= 2]
+    target_mask = np.isin(lab, keep) & fg
+    # 타겟 영역 내부의 국소 최대만 산란점 후보로
+    local_max = maximum_filter(smoothed, size=min_distance * 2 + 1)
+    peaks_mask = target_mask & (smoothed == local_max)
+    ys, xs = np.where(peaks_mask)
+    if len(ys) == 0:                                   # 국소최대 없으면 타겟 영역 최상위 픽셀
+        ys, xs = np.where(target_mask)
     vals = smoothed[ys, xs]
     order = np.argsort(vals)[::-1][:k]
     return [(float(ys[i]), float(xs[i])) for i in order]
