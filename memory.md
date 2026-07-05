@@ -18,7 +18,7 @@ Geng et al. 2023 SAR-ATR 논문 4개 실험 재현 + 우리 팀 개선 3개. 코
 ## ⭐ Exp B 하이브리드 파이프라인 (지금의 핵심 작업)
 **노선**: 로컬 MATLAB(원본 Agarwal repo, 다른 채팅에서 실행)로 증강 데이터 생성 → Drive → Colab Python(이 repo)에서 학습.
 - 왜: OSU Box precomputed 삭제(404) + Python 포팅은 검증 왕복이 김 → 원본 MATLAB 직접 실행이 정확·빠름(가속 완료 18초/장).
-- ⚠️ 유일한 편차: `gaussWidth=1.0` 고정. **합성품질=정확도에 영향**하므로, 96% 미달 시 σ_G 재검토. 대표이미지로 σ_G∈{1,2,3} 잔차비교해 최적 고정 권장.
+- ✅ `gaussWidth=1.0` 편차 검증 완료: 2S1에서 σ_G=1(9419.6) vs σ_G=2(9419.4) 잔차차이 **0.002%** → σ_G 민감도 낮음 정량 확인. **1.0 고정 확정, 재복원 불필요.** (blind 아니라 검증 후 고정 → 발표 방어 가능)
 
 ### 데이터 3종 (`.mat`, Drive 통해 전달)
 - `<class>_aug_images.mat`: El17 증강 학습(imgTrain N×64×64 복소, 샘플당196장) — **🔴 아직 생성 중(stage3 대기)**
@@ -30,10 +30,11 @@ Geng et al. 2023 SAR-ATR 논문 4개 실험 재현 + 우리 팀 개선 3개. 코
 `augmentation/precomputed_aug.py`: `AugImagesDataset/BaselineDataset/TestImagesDataset`(SARDataset 호환), `inspect_mat`, `_resolve_class`(파일명 매핑 검증됨).
 
 ### 다음에 할 일 (순서)
-1. 로컬 MATLAB: stage3(`generate_aug_images.m`)+merge → `<class>_aug_images.mat` 9개 생성 → Drive 업로드
-2. Colab에서 `inspect_mat`로 변수명·shape 검증 (특히 test의 imgTest 변수명 확인)
-3. 최종 학습 셀(아래) 실행 → baseline 56.6% vs aug 96.4% 재현
-4. 되면 REPORT.md 수치 갱신, Grad-CAM(개선#3)을 이 완전판 모델로 재실행
+1. ✅ stage2 계수 136장 완공, σ_G=1.0 확정(재복원 불필요)
+2. 🔄 로컬 MATLAB: stage3(`generate_aug_images.m`) **구동 중** → merge_files(루프 자동화됨) → `<serial>_aug_images.mat` 9개 → Drive 업로드
+3. Colab에서 `inspect_mat`로 변수명·shape 검증 (특히 test의 imgTest 변수명 확인)
+4. 최종 학습 셀(아래) 실행 → baseline 56.6% vs aug 96.4% 재현
+5. 되면 REPORT.md 수치 갱신, Grad-CAM(개선#3)을 이 완전판 모델로 재실행
 
 ### 최종 학습 셀 (데이터 준비되면)
 ```python
