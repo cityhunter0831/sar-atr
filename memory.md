@@ -7,12 +7,14 @@
 ## 프로젝트 한 줄
 Geng et al. 2023 SAR-ATR 논문 4개 실험 재현 + 우리 팀 개선 3개. 코드는 GitHub(sar-atr), 데이터·결과는 Google Drive, 학습은 Colab(GPU).
 
+**우리 팀 개선 3종 (혼동 금지)**: #1 SSIM 클러터경계(Exp A) / #2 대비 자동조절 Optuna(Exp C) / #3 XAI 산란점검증(Exp B). ※옵티마이저(ADAM vs SGD) 비교는 개선사항 아님 — 과거 문서 드리프트로 잘못 들어갔던 항목.
+
 ## 실험 현황 요약
 | Exp | 목표 | 현재 상태 |
 |---|---|---|
 | A 클러터전이 | Table4 재현 | 🟠 TrainOR→CT 하락·CT회복은 재현. **CTx2 붕괴(39% vs 논문96%) 원인 미확정(T5)** — Colab 재실행해 `[T5 진단]` 폴더로드수 확인 필요 |
 | B PH보간 few-shot ⭐ | 56.6%→96.4% | 🟢 **66.6%→90.9%** (log-amp 60dB/AT). 하이브리드 완주, 논문 근접 (아래 상세) |
-| C 대비보정 | SAMPLE 91.9%→94.5% | 🟡 73.6%→80.9% 나옴. Optuna 결과 정리 필요 |
+| C 대비증강 | SAMPLE 91.9%→94.5% | 🟡 **재현+개선 2단 재구축 완료**: 논문 실제 방법=`ColorJitter(contrast=0.5)`×3 재현 → Optuna로 대비 strength·levels 자동탐색. 이전 CLAHE는 논문 방법 아니어서 교체. Colab 재실행 필요 |
 | D OOD | ID=SAMPLE, ODIN vs Maha | 🟠 코드 재설계 완료(ID=SAMPLE), **재실행해 수치 갱신 필요** |
 
 ## ⭐ Exp B 하이브리드 파이프라인 (지금의 핵심 작업)

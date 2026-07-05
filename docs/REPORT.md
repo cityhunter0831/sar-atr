@@ -14,7 +14,7 @@
 | Exp A Table 4 (클러터 전이) | 도메인 갭 → CT로 회복 | 66.7%→91.1%(SMPL) 재현, CTx2 39.4% 붕괴 **원인 특정(BUG-3 수정완료, Colab 재실행 대기)** | 🟠→🟢 예상 |
 | Exp A SSIM (개선 #1) | — (논문에 없음) | 0.9472 ± 0.0024 | ✅ 신규 |
 | Exp B Table 3 (PH 보간, few-shot 136장) | 56.6% → 96.4% (SMPL/AT) | 선형보간: 49.8%→64.9% / **산란점 완전판: 66.6%→90.9%** (log-amp 60dB, AT) | 🟢 근접 재현 |
-| Exp C Figure 1/Table6 (대비 보정) | 65.3%→88.5% / 91.9%→94.5%(K=0) | 73.6% → 80.9% | 🟡 부분 |
+| Exp C Table6 (대비 증강, SAMPLE K=0) | 91.9%→94.5%(RN18) | 재현+개선 2단(ColorJitter 재현 → Optuna 자동탐색), Colab 재실행 예정 | 🟡 재측정 |
 | Exp D OOD (ODIN vs Maha, ID=SAMPLE) | Fig9: far-OOD쉬움/near-OOD어려움 | far-OOD 완벽, near-OOD 한계 (재설계 후 재검증 필요) | 🟠 재검증 필요 |
 
 ---
@@ -93,30 +93,32 @@ SAR 타겟 chip을 서로 다른 배경 클러터에 합성(전이)하여 학습
 
 ---
 
-## Exp C — 대비 보정 (Contrast Balance, 논문 Figure 1)
+## Exp C — 대비 증강 (Contrast Augmentation, 논문 Section 3 / Table 6) — 재현+개선 2단
 
-### 논문 실험
-합성(synthetic) 데이터로 학습한 모델을 실측(measured) 데이터에서 테스트하면 명암/대비 특성 차이로 성능이 하락. **대비 보정(CLAHE)**으로 이 도메인 갭을 완화.
+### 논문 실험 (실제 방법)
+합성(synthetic) SAR로 학습→실측(measured) 테스트 시 **타겟/배경 대비 차이**로 성능 하락. 논문은 학습 이미지에 **`transforms.ColorJitter(contrast=0.5)`** 를 적용해 대비를 무작위([0.5,1.5])로 흔들며 **이미지당 ~3개 대비 버전**을 만들어(806×3=2418) 학습 → 모델이 절대 밝기를 무시하고 타겟 구조에 집중하게 함. **목표: RN18 SAMPLE-Ori 91.9% → SAMPLE-Aug 94.5% (K=0)**.
+> ⚠️ 논문은 `contrast=0.5`·3레벨을 **근거 없이 임의 고정**(매직넘버). 왜 0.5인지·왜 3배인지 정당화 없음 → 우리 개선 #2의 출발점.
 
-### 우리 재현 방법
-- **데이터셋**: **SAMPLE 데이터셋** (benjaminlewis-afrl/SAMPLE_dataset_public) — synthetic → measured, 10개 클래스
-- **툴**: CLAHE 기반 `ContrastBalance` + **Optuna 하이퍼파라미터 자동 탐색** (20 trials), ResNet18
-- **평가**: synth로 학습 → real로 테스트 (Figure 1 원본 방법)
+### 우리 재현+개선 방법 (2단 구조)
+- **데이터셋**: SAMPLE (benjaminlewis-afrl/SAMPLE_dataset_public), synthetic→measured, 10클래스. 대비 증강은 **train-only**(무작위), 평가는 real 원본 그대로.
+- **① no-aug baseline**: synth 학습(증강 없음) → real 평가 (논문 Ori 91.9% 대응)
+- **② 논문 재현**: `ColorJitter(contrast=0.5)` ×3 로 synth 증강 → real 평가 (논문 Aug 94.5% 대응). 구현 `ContrastJitter` + `RepeatAugmentedDataset`.
+- **③ 개선 #2 (Optuna 자동탐색)**: 대비 강도(strength∈[0.1,0.9])·레벨(∈{1,2,3,4})을 Optuna로 자동 최적화 → 매직넘버 0.5·3레벨을 **근거 있는 최적값**으로 대체. 구현 `make_contrast_optuna_objective`.
 
-### 방법론적 선택 이유 (⭐ 논문과 가장 크게 다른 부분)
-- **왜 MSTAR El 교차 대신 SAMPLE인가**: 논문 원본은 MSTAR El=17°→30° 교차 부각을 썼으나, 이는 "부각 차이" 문제라 대비 보정과의 인과가 약함. **SAMPLE은 동일 타겟의 시뮬레이션·실측 쌍**을 제공하여, synth-real 간 **명암/대비 도메인 갭**이 정확히 대비 보정으로 풀어야 할 문제 → 대비 보정 실험의 더 적합한 표준 벤치마크.
-- **왜 Optuna인가**: 대비 보정 파라미터(clip_limit, tile_grid_size, global_norm)를 수동 조정 대신 자동 최적화 → 재현성·객관성 강화 (논문에 없는 방법론적 개선).
-- MSTAR El=17°→30° 교차 실험은 `run_el_ablation()`으로 **보조 ablation** 유지.
+### 방법론적 선택 이유
+- **왜 SAMPLE인가**: 논문 Figure 1은 MSTAR El=17°→30° 교차 부각(부각 차이 문제)이나, **Table 6 주실험은 SAMPLE synth→real**. SAMPLE은 동일 타겟의 시뮬레이션·실측 쌍이라 synth-real **대비 도메인 갭**이 대비 증강으로 정확히 풀어야 할 문제 → 표준 벤치마크. (MSTAR El 교차는 `run_el_ablation()` 보조 유지)
+- **왜 Optuna인가**: 논문의 `contrast=0.5`는 손으로 찍은 매직넘버. 자동 탐색으로 (a) synth→real 갭을 가장 잘 닫는 대비 강도를 데이터로 도출, (b) 최적값+민감도 곡선으로 "왜 이 값인가" 정당화, (c) 재현성·객관성 확보. (논문에 없는 방법론적 개선)
+- **CLAHE**(`ContrastBalance`)는 대안 대비 정규화로 코드에 유지하되, 주 재현선은 논문 실제 방법인 ColorJitter로 교체.
 
 ### 결론 및 논문 대비 비교
 | 조건 | 우리 결과 | 논문/목표 |
 |---|---|---|
-| 증강 없음 (synth→measured) | 73.6% | ~65.3% |
-| 대비 보정(CLAHE) 적용 | 80.9% | 목표 ≥88.5% |
-| Optuna 최적 파라미터 | clip_limit=1.99, tile=4, global_norm=True | — |
+| ① 증강 없음 (synth→measured) | (Colab 재실행 예정) | 논문 Ori 91.9% |
+| ② 논문 ColorJitter(0.5)×3 재현 | (Colab 재실행 예정) | 논문 Aug 94.5% |
+| ③ Optuna 자동탐색 (strength·levels) | (Colab 재실행 예정) | ②보다 향상 목표 |
 
-- **방향성 재현**: 대비 보정으로 73.6% → 80.9% (+7.3%p) 상승. 대비 보정이 synth-real 갭을 줄인다는 논문 주장 확인.
-- **시사점**: 목표 88.5%엔 미달. Optuna trial 수·epoch 증가로 개선 여지. SAMPLE은 MSTAR El 교차보다 도메인 갭이 근본적으로 커서 완전 극복이 더 어려움 — 대비 보정만으로는 한계가 있다는 시사점.
+> 이전 CLAHE 기반 결과(73.6→80.9%)는 논문 실제 방법(ColorJitter)이 아니었음 → 논문 충실 재현선으로 교체 후 재측정. Cell 8 재실행 필요.
+- **개선 #2 발표 메시지**: 논문의 임의 대비값(0.5)을 Optuna 자동탐색으로 대체 → 최적 대비 강도·레벨을 근거 있게 도출, 재현성·객관성 확보.
 
 ---
 
@@ -164,7 +166,7 @@ SAR 타겟 chip을 서로 다른 배경 클러터에 합성(전이)하여 학습
 | # | 개선 | 위치 | 결과 |
 |---|---|---|---|
 | 1 | **SSIM 경계 아티팩트 정량화** | `run_boundary_ssim_analysis()` (exp_a) | SSIM 0.9472 — 클러터 전이 경계 왜곡 최소, 타겟 구조 충실 보존 정량 입증 |
-| 2 | **대비 자동조절 (Optuna 자동탐색)** | `exp_c_contrast_optuna.py` | 논문은 대비 레벨 3개를 근거 없이 임의 고정 — 우리는 Optuna로 대비 파라미터를 자동 최적화(재현성·객관성). 논문 3레벨 재현을 baseline으로 두고 그 위에 자동탐색을 얹음 |
+| 2 | **대비 자동조절 (Optuna 자동탐색)** | `exp_c_contrast_optuna.py` | 논문 실제 방법=`ColorJitter(contrast=0.5)`×3(매직넘버 임의고정). 2단 구조: 논문 방법 재현(baseline) → Optuna로 대비 강도·레벨 자동탐색(개선). 재현성·객관성 확보 |
 | 3 | **XAI × 산란점 IoU 검증** (Grad-CAM → 픽셀 단위 XAI로 확장) | `run_gradcam_analysis()` / `run_xai_analysis()` (exp_b) | 완전판(산란점 기반, log-amp 60dB, 90.9%) 모델로 재실행 완료. 아래 상세 |
 
 ### 개선 #3 상세 — XAI로 물리적 산란점 검증

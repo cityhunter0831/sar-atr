@@ -94,7 +94,7 @@
 ### 실험 설계 (Section 3, 4.3)
 - **데이터 = SAMPLE** (10 클래스): `2S1, BMP2, BTR70, M1, M2, M35, M548, M60, T72, ZSU23`
 - **K 파라미터**: 학습셋 중 **실측(measured) 비율**. K=0 → 100% synthetic 학습 → measured 테스트 (논문 핵심 시나리오)
-- **증강**: 복소 데이터에서 **3가지 대비 레벨** 이미지 생성 → 806×3 = 2418 학습 샘플
+- **증강 (논문 실제 방법)**: **`transforms.ColorJitter(contrast=0.5)`** — 학습 이미지 대비를 [0.5,1.5]에서 무작위 스케일, 이미지당 ~3개 대비 버전 → 806×3 = 2418 학습 샘플. train-only 데이터 증강(평가는 real 원본). ⚠️ `contrast=0.5`·3레벨은 **근거 없이 임의 고정된 매직넘버** (논문에 정당화 없음).
 - **모델**: RN18, SMPL7, AConv, Heiligers
 
 ### Table 5 — SAMPLE 샘플 수
@@ -113,8 +113,9 @@
 ResNet18, train El17°→test El30°: 원본(밝기 편향) 97.2% / 대비보정 테스트 65.3% / 대비보정 학습 **88.5%**
 
 ### 현재 코드와의 차이
-- 대체로 방향 맞음 (SAMPLE synth→measured, ResNet18). **목표치 = K=0에서 RN18 94.5%** 로 명시할 것.
-- Optuna는 우리 개선(논문엔 없음). 논문은 대비 레벨 3개 고정.
+- SAMPLE synth→measured, ResNet18 방향 맞음. **목표치 = K=0에서 RN18 91.9%(Ori)→94.5%(Aug)**.
+- **재현+개선 2단 구조**(`exp_c_contrast_optuna.py`): ①no-aug ②논문 `ColorJitter(contrast=0.5)`×3 재현 ③Optuna로 대비 strength·levels 자동탐색. 이전 CLAHE 방식은 논문 실제 방법(ColorJitter)이 아니어서 재현선으로 교체함.
+- Optuna는 우리 개선 #2(논문엔 없음, 논문은 매직넘버 0.5·3레벨 고정).
 
 ---
 

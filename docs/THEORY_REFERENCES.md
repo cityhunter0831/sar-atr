@@ -71,15 +71,18 @@ SAR 이미지 = 타겟 + 클러터(배경). CNN이 배경 밝기/질감에 과�
 ## Exp C — Contrast-Based Augmentation
 
 ### 이론적 배경
-합성(synthetic) SAR은 실측(measured)보다 배경 클러터가 약함(대비 다름). synth로 학습→real 테스트 시 "밝기 편향" 학습으로 붕괴. **여러 대비 레벨(CLAHE류)로 증강** → 모델이 절대 밝기 무시하고 타겟 구조에 집중.
+합성(synthetic) SAR은 실측(measured)보다 배경 클러터가 약함(대비 다름). synth로 학습→real 테스트 시 "밝기 편향" 학습으로 붕괴. **대비를 무작위로 흔들어 증강** → 모델이 절대 밝기 무시하고 타겟 구조에 집중.
+- **논문 실제 방법**: `transforms.ColorJitter(contrast=0.5)` — 대비 [0.5,1.5] 무작위 스케일, 이미지당 ~3레벨(806×3=2418). `contrast=0.5`·3레벨은 근거 없는 매직넘버.
+- **우리 개선 #2 (2단)**: ①no-aug ②논문 ColorJitter 재현 ③Optuna로 대비 strength·levels 자동탐색 → 매직넘버를 근거 있는 최적값으로. train-only 증강, 평가는 real 원본.
 
 ### 참조 & 무엇을 참조
-- Geng Section 3, 4.3, Table 6 — SAMPLE 10클래스, K=0(100% synth) → RN18 91.9%→94.5%
-- Geng Fig1 — MSTAR El17→30 대비 붕괴 데모 (97.2/65.3/88.5)
+- Geng Section 3, 4.3, Table 6 — SAMPLE 10클래스, K=0(100% synth) → RN18 91.9%→94.5%. 대비 증강 = ColorJitter(contrast=0.5).
+- Geng Fig1 — MSTAR El17→30 대비 붕괴 데모 (97.2/65.3/88.5), 보조 ablation.
 
 ### 구현 난점
 - SAMPLE 경로/클래스 규약(real/synth, 소문자 10클래스)
-- Optuna는 우리 추가(논문은 대비 3레벨 고정)
+- 대비 증강은 train-only(무작위), 평가는 real 원본 — 평가에 무작위 대비 넣지 말 것.
+- Optuna는 우리 개선(논문은 매직넘버 0.5·3레벨 고정). CLAHE(`ContrastBalance`)는 대안으로 코드 유지.
 
 ---
 

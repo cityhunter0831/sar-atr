@@ -23,7 +23,7 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 
 **우리 팀 개선 3가지 (논문에 없는 추가 기여):**
 1. SSIM 경계 아티팩트 정량화 (`run_boundary_ssim_analysis()` in exp_a) — 클러터 전이 품질 정량화
-2. 대비 자동조절 (Optuna 하이퍼파라미터 자동탐색) (`exp_c_contrast_optuna.py`) — 논문은 대비 레벨 **3개를 근거 없이 임의 고정**. 우리는 Optuna로 대비 파라미터를 자동 최적화 → 재현성·객관성 확보. (논문 3레벨 재현은 baseline으로 유지, 그 위에 자동탐색을 얹음)
+2. 대비 자동조절 (Optuna 자동탐색) (`exp_c_contrast_optuna.py`) — **재현+개선 2단 구조**. 논문 실제 방법 = `ColorJitter(contrast=0.5)` ×3 (매직넘버·3레벨 임의 고정, 근거 없음). ①no-aug ②논문 ColorJitter(0.5)×3 재현 ③Optuna로 대비 강도(strength)·레벨 자동탐색 → 근거 있는 최적값. 대비 증강은 train-only, 평가는 real 원본. (구현: `ContrastJitter`, `make_contrast_optuna_objective`, `RepeatAugmentedDataset`)
 3. XAI × 산란점 IoU 검증 (`run_gradcam_analysis()` + `run_xai_analysis()` in exp_b) — 모델이 물리적 산란점을 보는지 검증.
    IoU 단조증가 서사(주축=IoU): Grad-CAM 8×8(0.12) → 16×16(0.19, `from_last=1`) → Occlusion 픽셀(인과, 0.24) → SmoothGrad-IG 픽셀(공리적, **0.29**). 비율은 보조(맵 뾰족함에 좌우돼 순위비교 부적합). 구현 `gradcam/attributions.py`.
 
@@ -51,7 +51,7 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 |---|---|---|---|
 | Exp D OE 데이터 | MiniSAR + SAR-ship | **SAR-ship만** | MiniSAR은 비공개(논문 저자 자체 개발) → 공개 SAR-ship로 대체 |
 | 개선 #1 SSIM | (없음) | 추가 | 클러터 전이 경계 품질 정량화 (우리 기여) |
-| 개선 #2 대비 자동조절 | 대비 레벨 3개 **임의 고정** | **Optuna 자동 탐색** | 대비 파라미터 자동 최적화로 재현성·객관성 확보 (우리 기여) |
+| 개선 #2 대비 자동조절 | `ColorJitter(contrast=0.5)` ×3 **임의 고정** | **Optuna 자동 탐색**(strength·levels) | 매직넘버 0.5 → 근거 있는 최적 대비값. 논문 방법 재현을 baseline으로 유지 (우리 기여) |
 | 개선 #3 XAI | (없음) | 추가 | 물리적 해석가능성 검증 — Grad-CAM→픽셀 XAI (우리 기여) |
 
 ### 🔧 트러블슈팅 (논문과 어긋남 = 수정 대상)
