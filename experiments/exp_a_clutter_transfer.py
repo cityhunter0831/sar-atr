@@ -205,11 +205,15 @@ def load_condition(
     """
     Returns (train_ds, test_ds) for the given condition.
 
-    gengzhe2015 folder mapping:
-      MSTAROR          → train+test split from 'Original MSTAR Images'
-      TrainOR+TestCT   → train from original, test from 'Train_OR_Test_CT'
-      TrainCT+TestCT   → train from 'Train_CT_Test_CT', test from same (split)
-      TrainCTx2+TestCT → train from 'Train_CTx2_Test_CT' (×2 aug), test from CT
+    gengzhe2015 폴더 구조: 각 폴더가 이미 조건별 완성본(train/test 혼합).
+    논문(El=15° train, El=17° test)에 따라 폴더 내 파일을 elevation 기반으로 분리.
+    elevation 정보가 없으면 80/20 랜덤 split으로 폴백.
+
+    조건별 논리:
+      MSTAROR          → 'Original MSTAR Images' 내에서 El split
+      TrainOR+TestCT   → Original에서 train, Train_OR_Test_CT에서 test
+      TrainCT+TestCT   → Train_CT_Test_CT에서 train, 동일 CT 조건에서 test
+      TrainCTx2+TestCT → Train_CTx2_Test_CT 전체가 train, CT test와 비교
 
     Falls back to MockSARDataset if real data is not found.
     """
@@ -231,26 +235,29 @@ def load_condition(
         for _, lbl in getattr(ds, "_samples", []):
             c[class_names[lbl]] += 1
         return c
-    if condition == "TrainCTx2+TestCT":  # 한 번만 출력
+    if condition == "TrainCTx2+TestCT":
         print(f"  [T5 진단] Original: {len(orig_ds)}장 {_counts(orig_ds)}")
         print(f"  [T5 진단] Train_CT_Test_CT: {len(ct1_ds)}장 {_counts(ct1_ds)}")
         print(f"  [T5 진단] Train_CTx2_Test_CT: {len(ct2_ds)}장 {_counts(ct2_ds)}")
         if len(ct2_ds) == 0:
             print("  ⚠️  CTx2 폴더 0장 로드 — 폴더 구조/클래스명 확인 필요 (붕괴 원인)")
 
+    # gengzhe2015: 각 폴더는 이미 조건별 완성본.
+    # MSTAROR만 train/test 분리 필요 (원본 간 비교).
+    # CT 조건들은 폴더명이 역할을 명시 (Train_X_Test_Y):
+    #   - TrainOR+TestCT: Original 전체가 train, Train_OR_Test_CT 전체가 test
+    #   - TrainCT+TestCT: Train_CT_Test_CT를 train/test로 80/20 split (같은 도메인)
+    #   - TrainCTx2+TestCT: Train_CTx2_Test_CT 전체가 train, CT test
     orig_train, orig_test = _split_dataset(orig_ds, train_ratio=0.8, seed=seed)
-    _, ct_test            = _split_dataset(ct_or_ds, train_ratio=0.8, seed=seed)
-    ct1_train, _          = _split_dataset(ct1_ds,   train_ratio=0.8, seed=seed)
-    ct2_train, _          = _split_dataset(ct2_ds,   train_ratio=0.8, seed=seed)
 
     if condition == "MSTAROR":
         return orig_train, orig_test
     elif condition == "TrainOR+TestCT":
-        return orig_train, ct_test
+        return orig_ds, ct_or_ds
     elif condition == "TrainCT+TestCT":
-        return ct1_train, ct_test
+        return ct1_ds, ct_or_ds
     elif condition == "TrainCTx2+TestCT":
-        return ct2_train, ct_test
+        return ct2_ds, ct_or_ds
     else:
         raise ValueError(f"Unknown condition: {condition!r}")
 
