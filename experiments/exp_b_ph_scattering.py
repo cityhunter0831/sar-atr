@@ -436,10 +436,16 @@ def run_gradcam_analysis(
     k: int = 5,
     n_samples: int = 10,
     save_dir: Path = RESULTS_DIR / "gradcam",
+    log_scale: bool = False,
+    dyn_range_db: float = 60.0,
 ) -> list[dict]:
     """
     우리 팀 개선 #3: Grad-CAM 히트맵과 공간 산란점 좌표 IoU 비교.
     모델이 실제 산란점 위치를 보고 분류하는지 물리적 신뢰도 검증.
+
+    ⚠️ log_scale/dyn_range_db는 반드시 모델 학습 시 전처리와 일치시켜야 함.
+    precomputed(MATLAB) aug 모델은 log_scale=True, dyn_range_db=60으로 학습됨.
+    불일치 시 모델이 OOD 입력을 받아 Grad-CAM이 배경으로 흩어짐(IoU 급락).
     """
     num_classes = len(CLASSES)
     model = get_model(model_name, num_classes)
@@ -477,11 +483,20 @@ def run_gradcam_analysis(
             continue
 
         # 모델이 64×64로 학습됐으므로 Grad-CAM도 동일 입력 크기 사용
-        image_t = amplitude_to_tensor(amp, center_crop=EXP_B_INPUT)  # [1,64,64]
-        amp128 = image_t.squeeze(0).numpy()         # CAM과 동일 좌표계
-        # 산란점·마스크는 CAM과 같은 좌표계에서 추출해야 IoU 계산 가능
+        image_lin = amplitude_to_tensor(amp, center_crop=EXP_B_INPUT)  # [1,64,64] 선형진폭
+        # 산란점은 선형진폭(실제 물리 밝은점)에서 추출 — dB 압축 전이 물리적으로 정확
+        amp128 = image_lin.squeeze(0).numpy()       # CAM과 동일 좌표계 (64×64)
         spatial_centers = extract_spatial_scattering_centers(amp128, k=k)
         ph_map = extract_scattering_centers(amp128, k=k)
+
+        # CAM 입력은 모델 학습 전처리와 일치시킴 (precomputed aug 모델은 log-amp 60dB로 학습)
+        # 좌표계는 동일하고 픽셀값 스케일만 바뀌므로 산란점 좌표와 IoU 비교 유효
+        if log_scale:
+            from augmentation.precomputed_aug import _normalize_amplitude
+            arr = _normalize_amplitude(amp128[None, ...], log_scale=True, dyn_range_db=dyn_range_db)
+            image_t = torch.from_numpy(arr[0]).unsqueeze(0)     # [1,64,64]
+        else:
+            image_t = image_lin
 
         gcam = GradCAM(model)
         cam = gcam(image_t.unsqueeze(0))            # [64,64]
