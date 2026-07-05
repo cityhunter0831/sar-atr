@@ -250,12 +250,11 @@ def make_contrast_optuna_objective(train_ds, val_ds, base_config, n_epochs_trial
             aug_train = repeat_dataset_fn(train_ds, aug, levels)
         else:
             aug_train = _AugmentedDataset(train_ds, aug)
-        aug_val = _AugmentedDataset(val_ds, aug)  # 평가도 동일 대비 정규화
-
+        # 대비 증강은 train-only. val(real)은 원본 그대로 평가 → synth→real 일반화 측정
         cfg = copy.deepcopy(base_config)
         cfg.epochs = n_epochs_trial
         model = get_model(cfg.model_name, cfg.num_classes)
-        _, result = train_model(model, aug_train, aug_val, cfg)
+        _, result = train_model(model, aug_train, val_ds, cfg)
         return result.accuracy
 
     return objective

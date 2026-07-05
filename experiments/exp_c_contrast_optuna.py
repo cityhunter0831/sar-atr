@@ -121,6 +121,34 @@ class AugmentedWrapper(SARDataset):
         return self._ds.class_names
 
 
+class IndexSubset(SARDataset):
+    """SARDataset의 부분집합 (인덱스 목록). test → val/test 분할용."""
+
+    def __init__(self, ds: SARDataset, indices: list[int]):
+        self._ds, self._indices = ds, list(indices)
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def __getitem__(self, idx: int) -> SARSample:
+        return self._ds[self._indices[idx]]
+
+    @property
+    def class_names(self) -> list[str]:
+        return self._ds.class_names
+
+
+def _split_val_test(ds: SARDataset, val_frac: float = 0.2, seed: int = 0
+                    ) -> tuple[SARDataset, SARDataset]:
+    """real 평가셋을 val/test로 무작위 분할 (Optuna는 val로만 튜닝 → test 누수 방지)."""
+    n = len(ds)
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(n)
+    n_val = max(1, int(n * val_frac))
+    val_idx, test_idx = perm[:n_val].tolist(), perm[n_val:].tolist()
+    return IndexSubset(ds, val_idx), IndexSubset(ds, test_idx)
+
+
 class RepeatAugmentedDataset(SARDataset):
     """
     원본을 `times`배로 확장하고 각 접근마다 augmentation을 적용.
@@ -287,7 +315,10 @@ def run(
     save_dir.mkdir(parents=True, exist_ok=True)
     n_classes = len(class_names)
 
-    train_ds, test_ds = load_sample(class_names)
+    train_ds, test_full = load_sample(class_names)
+    # real 평가셋을 val/test로 분할 — Optuna는 real_val로만 튜닝, 최종 수치는 못 본 real_test
+    real_val, real_test = _split_val_test(test_full, val_frac=0.2, seed=seed)
+    print(f"real 평가셋 분할: val={len(real_val)} / test={len(real_test)} (Optuna 누수 방지)")
 
     base_config = TrainConfig(
         model_name=model_name,
@@ -299,8 +330,8 @@ def run(
     # ── Step 1: baseline (synthetic → measured, 증강 없음) ──
     print("Step 1: Train synthetic (no aug) → Test measured")
     model_base = get_model(model_name, n_classes)
-    model_base, _ = train_model(model_base, train_ds, test_ds, base_config)
-    acc_no_aug = evaluate(model_base, test_ds).accuracy * 100
+    model_base, _ = train_model(model_base, train_ds, real_test, base_config)
+    acc_no_aug = evaluate(model_base, real_test).accuracy * 100
     print(f"  synth → measured (no aug): {acc_no_aug:.1f}%  (논문 RN18 SAMPLE-Ori 91.9%)")
 
     # ── Step 2: 논문 대비증강 재현 — ColorJitter(contrast=0.5) ×3 (train-only) ──
@@ -308,29 +339,29 @@ def run(
     paper_aug = ContrastJitter(strength=paper_contrast)
     paper_train = RepeatAugmentedDataset(train_ds, paper_aug, times=paper_levels)
     model_paper = get_model(model_name, n_classes)
-    model_paper, _ = train_model(model_paper, paper_train, test_ds, base_config)
-    acc_paper = evaluate(model_paper, test_ds).accuracy * 100
+    model_paper, _ = train_model(model_paper, paper_train, real_test, base_config)
+    acc_paper = evaluate(model_paper, real_test).accuracy * 100
     print(f"  synth+대비증강(논문 0.5×{paper_levels}) → measured: {acc_paper:.1f}%  "
           f"(논문 RN18 SAMPLE-Aug 94.5%)")
 
-    # ── Step 3: 우리 개선 — 대비 강도·레벨 Optuna 자동 탐색 ──
+    # ── Step 3: 우리 개선 — 대비 강도·레벨 Optuna 자동 탐색 (real_val로 선택) ──
     print(f"\nStep 3: 개선 #2 — Optuna 대비 자동탐색 ({n_optuna_trials} trials, "
-          f"{epochs_trial} epochs each)")
+          f"{epochs_trial} epochs each) — 선택은 real_val, 보고는 real_test")
     objective = make_contrast_optuna_objective(
-        train_ds, test_ds, base_config, n_epochs_trial=epochs_trial,
+        train_ds, real_val, base_config, n_epochs_trial=epochs_trial,
         repeat_dataset_fn=lambda ds, aug, t: RepeatAugmentedDataset(ds, aug, times=t))
     study = optuna.create_study(direction="maximize", study_name="exp_c_contrast_auto")
     study.optimize(objective, n_trials=n_optuna_trials, show_progress_bar=True)
     best = study.best_params
     print(f"\n  최적 대비 파라미터: {best}  (Optuna best val {study.best_value*100:.1f}%)")
 
-    # 최적값으로 full-epoch 재학습
+    # 최적값으로 full-epoch 재학습 → 못 본 real_test로 최종 보고
     best_aug = ContrastJitter(strength=best["strength"])
     best_train = RepeatAugmentedDataset(train_ds, best_aug, times=best["levels"])
     model_auto = get_model(model_name, n_classes)
-    model_auto, _ = train_model(model_auto, best_train, test_ds, base_config)
-    acc_auto = evaluate(model_auto, test_ds).accuracy * 100
-    print(f"  synth+대비증강(Optuna 최적) → measured: {acc_auto:.1f}%")
+    model_auto, _ = train_model(model_auto, best_train, real_test, base_config)
+    acc_auto = evaluate(model_auto, real_test).accuracy * 100
+    print(f"  synth+대비증강(Optuna 최적) → measured: {acc_auto:.1f}%  (못 본 real_test)")
 
     results = {
         "model": model_name,
