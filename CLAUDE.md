@@ -65,6 +65,7 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 | T5 | Exp A | TrainCTx2 붕괴(39%) → 회복(**96.0%**) | 🟠 진단 로깅 추가 — **Colab 실행해 폴더 로드수 확인 필요** |
 | T6 | Exp D | ID=MSTAR → **ID=SAMPLE 10클래스**, SAR-ship=far-OOD | ✅ `SampleDataset` 기반 재설계 |
 | T7 | Exp C | 목표 불명확 → K=0 **RN18 94.5%** 명시 | ✅ `_print_figure1` 수정 |
+| T8 | Exp B | σ_G 라인서치 제거 필요성 → **σ_G=1.0 고정 확정** | ✅ 2S1 대표이미지 잔차 차이 0.002% 정량 검증. 재복원 불필요. |
 | ✅ | 공통 | ~~BUG-X1~X4 (Taylor 부호/오프셋/포맷)~~ | 완료 |
 
 > **T1~T4,T6,T7은 코드 반영 완료. 실데이터 검증은 Colab 필요.** T5는 진단 로깅만 넣음(원인 확정에 Colab 실행 필요).
@@ -104,7 +105,7 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 ### ⭐ 현재 노선 = 하이브리드 (로컬 MATLAB + Colab Python) — 이게 실제 파이프라인
 OSU Box precomputed 데이터가 삭제(404)돼 지름길이 막힌 뒤, **원본 MATLAB(Agarwal repo)을 로컬에서 직접 실행**하는 방식으로 전환. Python 포팅(`ph_sparse.py`)은 원리 이해·검증용으로 남기되, **실제 증강 데이터는 MATLAB이 생성**한다.
 
-- **로컬 MATLAB (다른 채팅=Antigravity/Gemini 담당, Agarwal repo)**: stage1(PH)→stage2(희소복원)→stage3(generate)→merge. 가속 완료(장당 26분→18초): 익명함수 슬라이싱 제거, `pagemtimes`, `maxNumCompThreads(1)`, **`gaussWidth=1.0` 고정**(⚠️ 유일한 근사 — 합성품질=정확도에 영향, 대표이미지로 σ_G∈{1,2,3} 잔차비교해 최적 고정 권장).
+- **로컬 MATLAB (다른 채팅=Antigravity/Gemini 담당, Agarwal repo)**: stage1(PH)→stage2(희소복원)→stage3(generate)→merge. 가속 완료(장당 26분→18초): 익명함수 슬라이싱 제거, `pagemtimes`, `maxNumCompThreads(1)`, **`gaussWidth=1.0` 고정 ✅ 검증 완료** — 2S1 대표이미지에서 σ_G=1(잔차 9419.6) vs σ_G=2(잔차 9419.4) 차이 **0.002%**. 민감도 극히 낮음 정량 확인 → 재복원 불필요, 발표 방어 가능.
 - **Colab Python (이 repo=sar-atr, 나 담당)**: MATLAB이 만든 `.mat`을 로드해 SMPL/AT 학습.
 - **데이터 핸드오프 = Google Drive** (두 채팅은 메모리 공유 안 함, `.mat` 파일이 인터페이스).
 
