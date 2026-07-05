@@ -17,8 +17,31 @@ import numpy as np
 
 
 def _load_mat(path):
+    """scipy v7.3 이전 포맷 먼저 시도, 실패 시 h5py(v7.3/HDF5)로 재시도."""
     from scipy.io import loadmat
-    return loadmat(str(path), squeeze_me=False, struct_as_record=False)
+    try:
+        return loadmat(str(path), squeeze_me=False, struct_as_record=False)
+    except NotImplementedError:
+        return _load_mat_hdf5(path)
+
+
+def _load_mat_hdf5(path):
+    """MATLAB v7.3 (.mat = HDF5) 파일을 h5py로 읽어 {key: ndarray} dict 반환."""
+    import h5py
+    out = {}
+    with h5py.File(str(path), "r") as f:
+        for k in f.keys():
+            v = f[k]
+            if isinstance(v, h5py.Dataset):
+                arr = v[()]
+                # MATLAB은 F-order(column-major)로 저장 → C-order로 전치
+                if arr.ndim >= 2:
+                    arr = arr.T
+                # MATLAB complex: 'r'+'i' compound dtype → complex128
+                if arr.dtype.names and set(arr.dtype.names) >= {"real", "imag"}:
+                    arr = arr["real"] + 1j * arr["imag"]
+                out[k] = arr
+    return out
 
 
 def inspect_mat(path: str | Path) -> dict:
