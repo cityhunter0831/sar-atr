@@ -11,7 +11,7 @@ Geng et al. 2023 SAR-ATR 논문 4개 실험 재현 + 우리 팀 개선 3개. 코
 | Exp | 목표 | 현재 상태 |
 |---|---|---|
 | A 클러터전이 | Table4 재현 | 🟠 TrainOR→CT 하락·CT회복은 재현. **CTx2 붕괴(39% vs 논문96%) 원인 미확정(T5)** — Colab 재실행해 `[T5 진단]` 폴더로드수 확인 필요 |
-| B PH보간 few-shot ⭐ | 56.6%→96.4% | 🔄 **하이브리드 파이프라인 진행 중** (아래 상세) |
+| B PH보간 few-shot ⭐ | 56.6%→96.4% | 🟢 **66.6%→90.9%** (log-amp 60dB/AT). 하이브리드 완주, 논문 근접 (아래 상세) |
 | C 대비보정 | SAMPLE 91.9%→94.5% | 🟡 73.6%→80.9% 나옴. Optuna 결과 정리 필요 |
 | D OOD | ID=SAMPLE, ODIN vs Maha | 🟠 코드 재설계 완료(ID=SAMPLE), **재실행해 수치 갱신 필요** |
 
@@ -29,16 +29,16 @@ Geng et al. 2023 SAR-ATR 논문 4개 실험 재현 + 우리 팀 개선 3개. 코
 ### 🔴 발견·수정한 버그 (이번 세션 핵심)
 1. **v7.3 로더**: `.mat`가 MATLAB v7.3(HDF5)로 저장돼 `scipy.io.loadmat`이 `NotImplementedError`. → `precomputed_aug.py` `_load_mat`에 h5py 폴백 추가(F-order 전치, complex compound dtype real+imag 처리). 커밋 `0416cf2`.
 2. **인덱싱 버그**(`generate_aug_images.m`): `x_recovered`는 few-shot 압축순서(1..N)인데 전체 PH 배열(`arr_img_fft_polar`/`depression`/`arr_azi`)을 같은 idxTrain으로 접근 → 다른 칩 신호가 잔차에 섞임(상관 0.18). `selected_idx=RC.selected_indices(idxTrain)` 매핑으로 수정 → 상관 0.997. MATLAB 파일은 `matlab_pipeline/`에 백업.
+3. **로그진폭(dB) 전처리**(`precomputed_aug.py` `_normalize_amplitude`): 버그 수정 후에도 선형진폭은 aug 72.1% 정체(epoch 60·120 동일 → 학습 포화). SAR 진폭 dynamic range가 커 CNN이 피크 산란점만 학습→T72/BMP2 혼동. per-image 정규화→dB압축→clip→[0,1] (`log_scale=True, dyn_range_db=60`) 도입 → **72.1%→90.9%**. dB 스윕 결과 60dB 피크(50=90.1/60=90.9/80=90.5). **AT>LSM** (LSM은 합성 T72 경계 흐려 72%로 폭락).
 
 ### Python 쪽 준비 (완료)
 `augmentation/precomputed_aug.py`: `AugImagesDataset/BaselineDataset/TestImagesDataset`(SARDataset 호환), `inspect_mat`, `_resolve_class`(파일명 매핑 검증됨).
 
 ### 다음에 할 일 (순서)
-1. ✅ stage2 계수 136장 완공, σ_G=1.0 확정 / ✅ v7.3 로더·인덱싱 버그 수정
-2. 🔄 로컬 MATLAB: 버그 수정본으로 stage3+merge **재생성 중** → `<serial>_aug_images.mat` 9개 → Drive **덮어쓰기 업로드**
-3. Colab에서 60 epoch 재학습 → baseline 52% 확인됨 / aug 목표 96.4% 재판정
-4. aug가 여전히 낮으면: (a)클래스별 정확도 확인(BMP2/T72 tracked vehicle 혼동 주시) (b)epoch 증가 (c)σ_G를 BMP2/T72에도 검증
-5. 되면 REPORT.md aug 수치 확정, Grad-CAM(개선#3)을 완전판 모델로 재실행
+1. ✅ stage2 계수 136장 완공, σ_G=1.0 확정 / ✅ v7.3 로더·인덱싱 버그 수정 / ✅ 재생성·재학습 완료
+2. ✅ Colab 60 epoch: baseline 66.6% / **aug 90.9%** (log-amp 60dB/AT) — REPORT.md 확정 완료
+3. 잔여 갭(90.9 vs 96.4, T72 85%·2S1 84% 병목): σ_G를 T72/2S1에도 클래스별 재검증하면 개선 여지(현재 2S1만 검증). 로컬 MATLAB 시간 있을 때.
+4. Grad-CAM(개선#3)을 완전판 aug 모델로 재실행 가능 (완전판 모델 확보됨)
 
 ### 최종 학습 셀 (데이터 준비되면)
 ```python
