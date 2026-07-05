@@ -15,7 +15,7 @@ Geng et al. 2023 SAR-ATR 논문 4개 실험 재현 + 우리 팀 개선 3개. 코
 | A 클러터전이 | Table4 재현 | 🟠 TrainOR→CT 하락·CT회복은 재현. **CTx2 붕괴(39% vs 논문96%) 원인 미확정(T5)** — Colab 재실행해 `[T5 진단]` 폴더로드수 확인 필요 |
 | B PH보간 few-shot ⭐ | 56.6%→96.4% | 🟢 **66.6%→90.9%** (log-amp 60dB/AT). 하이브리드 완주, 논문 근접 (아래 상세) |
 | C 대비증강 | SAMPLE 91.9%→94.5% | 🟢 **최종 수치 확정** (누수 방지 적용): ①no-aug 69.6% / ②논문 0.5×3 61.8% / ③Optuna(strength=0.672,levels=4) **80.3%** → **+18.5%p 개선**. 논문 0.5가 오히려 해가 됨을 정량 입증. |
-| D OOD | ID=SAMPLE, ODIN vs Maha | 🟠 코드 재설계 완료(ID=SAMPLE), **재실행해 수치 갱신 필요** |
+| D OOD | ID=SAMPLE, ODIN vs Maha | 🟢 **최종 수치 확정**: far-OOD(sarship) Maha AUROC=1.000 완벽 / near-OOD(holdout) 두 방법 모두 ~0.45(한계). 논문 패턴 재현. |
 
 ## ⭐ Exp B 하이브리드 파이프라인 (지금의 핵심 작업)
 **노선**: 로컬 MATLAB(원본 Agarwal repo, 다른 채팅에서 실행)로 증강 데이터 생성 → Drive → Colab Python(이 repo)에서 학습.

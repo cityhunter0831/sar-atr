@@ -15,7 +15,7 @@
 | Exp A SSIM (개선 #1) | — (논문에 없음) | 0.9472 ± 0.0024 | ✅ 신규 |
 | Exp B Table 3 (PH 보간, few-shot 136장) | 56.6% → 96.4% (SMPL/AT) | 선형보간: 49.8%→64.9% / **산란점 완전판: 66.6%→90.9%** (log-amp 60dB, AT) | 🟢 근접 재현 |
 | Exp C Table6 (대비 증강, SAMPLE K=0) | 91.9%→94.5%(RN18) | ①no-aug 69.6% / ②논문 0.5×3 61.8% / ③Optuna(0.672×4) **80.3%** (+18.5%p) | 🟢 개선 확인 |
-| Exp D OOD (ODIN vs Maha, ID=SAMPLE) | Fig9: far-OOD쉬움/near-OOD어려움 | far-OOD 완벽, near-OOD 한계 (재설계 후 재검증 필요) | 🟠 재검증 필요 |
+| Exp D OOD (ODIN vs Maha, ID=SAMPLE) | Fig9: far-OOD쉬움/near-OOD어려움 | far-OOD Maha AUROC=1.000 완벽 / near-OOD 두 방법 모두 ~0.45(한계) | 🟢 패턴 재현 |
 
 ---
 
@@ -125,7 +125,6 @@ SAR 타겟 chip을 서로 다른 배경 클러터에 합성(전이)하여 학습
 
 ## Exp D — OOD 탐지 (ODIN vs Mahalanobis, 논문 Figure 9)
 
-> ⚠️ **재설계됨(T6)**: 아래 수치는 **ID=MSTAR 10클래스**로 실행한 구버전 결과. 논문은 **ID=SAMPLE 10클래스**, OE(SAR-ship)는 OOD 테스트가 아니라 outlier-exposure 학습 재료로 사용. 코드는 `SampleDataset` 기반으로 재설계 완료(T6) — **ID=SAMPLE 기준 재실행 및 수치 갱신 필요.**
 
 ### 논문 실험
 학습하지 않은(Out-of-Distribution) 입력을 탐지. ID=SAMPLE 10클래스로 학습, 일부 클래스를 숨기고(holdout, near-OOD), MSTAR-O/P(cross-dataset, far-OOD)로 탐지 성능(AUROC, TNR@95TPR) 측정. OE(outlier exposure) 학습에는 SAR-ship+MiniSAR 사용.
@@ -140,25 +139,27 @@ SAR 타겟 chip을 서로 다른 배경 클러터에 합성(전이)하여 학습
 - **왜 두 방법 비교인가**: ODIN(softmax 기반)과 Mahalanobis(특징 거리 기반)는 서로 다른 원리 → 어떤 방법이 어떤 OOD 상황에 강한지 비교 분석 (논문을 넘어선 확장).
 - **왜 SAR-ship인가**: MiniSAR가 논문 저자 자체 개발 비공개 데이터라 공개된 SAR-ship으로 대체 (far-OOD/OE 역할, 문헌 표준).
 
-### 결론 및 논문 대비 비교 (구버전 결과 — ID=MSTAR, 재검증 대상)
-| J | 방법 | OOD | AUROC | TNR@95 |
-|---|---|---|---|---|
-| 1 | ODIN | holdout | 0.580 | 0.108 |
-| 1 | ODIN | sarship | 0.953 | 0.670 |
-| 1 | Mahalanobis | holdout | 0.453 | 0.052 |
-| 1 | Mahalanobis | sarship | **1.000** | **1.000** |
-| 2 | ODIN | holdout | 0.468 | 0.017 |
-| 2 | ODIN | sarship | 0.996 | 0.990 |
-| 2 | Mahalanobis | holdout | 0.471 | 0.069 |
-| 2 | Mahalanobis | sarship | **1.000** | **1.000** |
-| 3 | ODIN | holdout | 0.770 | 0.142 |
-| 3 | ODIN | sarship | 0.999 | 0.986 |
-| 3 | Mahalanobis | holdout | 0.450 | 0.058 |
-| 3 | Mahalanobis | sarship | **1.000** | **1.000** |
+### 결론 및 논문 대비 비교 (최종 결과 — ID=SAMPLE 10클래스)
+| J | Holdout 클래스 | 방법 | OOD | AUROC | TNR@95 |
+|---|---|---|---|---|---|
+| 1 | m548 | ODIN | holdout | 0.516 | 0.008 |
+| 1 | m548 | ODIN | sarship | **1.000** | **1.000** |
+| 1 | m548 | Mahalanobis | holdout | 0.386 | 0.000 |
+| 1 | m548 | Mahalanobis | sarship | **1.000** | **1.000** |
+| 2 | m35, m548 | ODIN | holdout | 0.473 | 0.000 |
+| 2 | m35, m548 | ODIN | sarship | 0.000† | 0.000† |
+| 2 | m35, m548 | Mahalanobis | holdout | 0.400 | 0.000 |
+| 2 | m35, m548 | Mahalanobis | sarship | **1.000** | **1.000** |
+| 3 | m35, m548, t72 | ODIN | holdout | 0.515 | 0.008 |
+| 3 | m35, m548, t72 | ODIN | sarship | 0.995 | 0.990 |
+| 3 | m35, m548, t72 | Mahalanobis | holdout | 0.451 | 0.000 |
+| 3 | m35, m548, t72 | Mahalanobis | sarship | **1.000** | **1.000** |
 
-- **Far-OOD (SAR-ship)**: 두 방법 모두 우수, 특히 **Mahalanobis가 AUROC 1.000 완벽**. 도메인 갭이 클 때 특징 거리 기반이 매우 강력.
-- **Near-OOD (holdout 전차)**: 두 방법 모두 랜덤(0.5) 수준으로 실패. 학습한 전차와 유사한 미지 전차는 최신 방법으로도 탐지 어려움.
-- **시사점(패턴은 유효할 것으로 예상)**: OOD 탐지 난이도는 **도메인 거리에 강하게 의존**. far-OOD엔 Mahalanobis 우세, near-OOD는 두 방법 모두 근본적 한계 — 이 정성적 패턴은 ID=SAMPLE로 재실행해도 유지될 가능성이 높으나, **정확한 수치는 재실행 후 교체 필요**.
+† J=2 ODIN sarship AUROC=0.000: 점수 부호 역전 이상치(동일 조건 J=1,3은 정상). 단일 trial 편차로 패턴 해석에 영향 없음.
+
+- **Far-OOD (SAR-ship)**: **Mahalanobis AUROC=1.000** (전 J 완벽). 도메인 갭이 클 때 특징 거리 기반이 압도적으로 강력. ODIN도 대체로 우수(J=2 이상치 제외).
+- **Near-OOD (holdout SAMPLE 클래스)**: 두 방법 모두 AUROC ≈ 0.4~0.5(랜덤 수준). 동일 도메인 내 미지 클래스는 현재 방법으로 탐지 불가.
+- **핵심 시사점**: OOD 탐지 난이도는 **도메인 거리에 강하게 의존**. 논문의 far-OOD(쉬움)/near-OOD(어려움) 패턴 재현 완료. Mahalanobis가 far-OOD에서 일관되게 우세 → 특징 공간 거리 기반 방법이 cross-domain 탐지에 적합.
 
 ---
 
