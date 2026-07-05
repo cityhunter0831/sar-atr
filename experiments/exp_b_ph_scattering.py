@@ -672,6 +672,78 @@ def run_xai_analysis(
     return records
 
 
+def run_optimizer_comparison(
+    data_dir: str | Path,
+    model_name: str = "smpl",
+    epochs: int = 60,
+    loss_type: str = "at",
+    log_scale: bool = True,
+    dyn_range_db: float = 60.0,
+    optimizers: tuple[str, ...] = ("adam", "sgd"),
+    save_dir: Path = RESULTS_DIR,
+) -> dict:
+    """
+    우리 팀 개선 #2: 증강 효과의 옵티마이저 의존성 분석 (ADAM vs SGD).
+
+    논문은 ADAM 고정. baseline(few-shot 136장)과 aug(산란점 증강)를 각각
+    ADAM/SGD로 학습해 2×2 표를 만든다 → "PH 물리 증강의 이득이 옵티마이저에
+    관계없이 재현되는가"를 검증. precomputed(MATLAB) 데이터 경로(90.9% 파이프라인)로 실행.
+
+    반환: {(optimizer, split): accuracy}. save_dir에 json + 막대그래프 저장.
+    """
+    import json
+    from augmentation.precomputed_aug import (
+        AugImagesDataset, BaselineDataset, TestImagesDataset)
+
+    kw = dict(log_scale=log_scale, dyn_range_db=dyn_range_db)
+    test_ds = TestImagesDataset(data_dir, **kw)
+    splits = {"baseline": BaselineDataset(data_dir, **kw),
+              "aug": AugImagesDataset(data_dir, **kw)}
+    print(f"Baseline {len(splits['baseline'])}장 / Aug {len(splits['aug'])}장 "
+          f"/ Test {len(test_ds)}장")
+
+    num_classes = len(CLASSES)
+    results: dict[tuple[str, str], float] = {}
+    for opt in optimizers:
+        for split_name, ds in splits.items():
+            cfg = TrainConfig(model_name=model_name, num_classes=num_classes,
+                              epochs=epochs, loss_type=loss_type, optimizer=opt)
+            _, r = train_model(get_model(model_name, num_classes), ds, test_ds, cfg)
+            results[(opt, split_name)] = r.accuracy
+            print(f"  [{opt.upper():4s}] {split_name:8s} acc = {r.accuracy*100:.1f}%")
+
+    save_dir.mkdir(parents=True, exist_ok=True)
+    payload = {f"{o}_{s}": results[(o, s)] for (o, s) in results}
+    with open(save_dir / "optimizer_comparison.json", "w") as f:
+        json.dump(payload, f, indent=2)
+
+    # 2×2 막대그래프: split별 그룹, optimizer별 색
+    fig, ax = plt.subplots(figsize=(6, 4))
+    split_order = ["baseline", "aug"]
+    x = np.arange(len(split_order))
+    width = 0.8 / max(1, len(optimizers))
+    for i, opt in enumerate(optimizers):
+        vals = [results[(opt, s)] * 100 for s in split_order]
+        bars = ax.bar(x + i * width, vals, width, label=opt.upper())
+        for b, v in zip(bars, vals):
+            ax.text(b.get_x() + b.get_width() / 2, v + 1, f"{v:.1f}",
+                    ha="center", fontsize=9)
+    ax.set_xticks(x + width * (len(optimizers) - 1) / 2)
+    ax.set_xticklabels(["MSTAR-R\n(few-shot 136)", "MSTAR-Aug\n(scattering aug)"])
+    ax.set_ylabel("Accuracy (%)"); ax.set_ylim(0, 100)
+    ax.set_title("Improvement #2: Optimizer dependence of aug effect (ADAM vs SGD)")
+    ax.legend(); plt.tight_layout()
+    fig.savefig(save_dir / "optimizer_comparison.png", dpi=150)
+    plt.close(fig)
+
+    print("\n── 개선 #2 요약 (증강 이득 = aug − baseline) ──")
+    for opt in optimizers:
+        gain = (results[(opt, "aug")] - results[(opt, "baseline")]) * 100
+        print(f"  {opt.upper():4s}: {results[(opt,'baseline')]*100:.1f}% → "
+              f"{results[(opt,'aug')]*100:.1f}%  (증강 이득 +{gain:.1f}%p)")
+    return results
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="smpl", choices=["smpl", "resnet18"])
