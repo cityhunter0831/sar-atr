@@ -24,7 +24,7 @@
 | 조건 (4개) | MSTAR_OR / Train_OR+Test_CT / Train_CT+Test_CT / Train_CTx2+Test_CT |
 | 재현 비교 수치 | 우리 4조건×2모델 정확도(±std, 3seed) **vs** 논문 Table 4 (SMPL7: 98.1/38.6/91.5/96.0, RN18: 99.8/55.2/97.5/98.4) |
 | 개선 결과 | **SSIM(개선#1)**: clutter transfer 전후 경계 SSIM 값 — "경계 아티팩트가 작다"는 정량적 근거 |
-| ⚠️ 확인 필요 | CTx2 조건이 우리는 붕괴(39%)로 나옴 — 논문(96%)과 다름. **재실행해 원인 확정 후 발표 수치 갱신 필수** (T5) |
+| ⚠️ 상태 | **BUG-3 수정 완료**: `load_condition()`이 CT 폴더를 불필요하게 80/20 재분할 → 제거. Colab 재실행으로 CTx2 수치 갱신 필요 (96% 근접 예상) |
 | 발표 문장 예시 | "논문처럼 클러터 전이 시 도메인 갭(하락)과 CTx2를 통한 회복을 확인했다 / 확인 중이다" |
 
 ---
@@ -38,7 +38,7 @@
 | 조건 | **few-shot baseline(136장, MSTAR-R)** vs **PH 증강(1088장, MSTAR-Aug1)** |
 | 재현 비교 수치 | 우리 SMPL/AT 정확도 **vs** 논문 56.6%→96.4% |
 | 개선 결과 | **Grad-CAM(개선#3)**: 증강 모델의 CAM이 산란점 위치와 얼마나 겹치는지(coverage/IoU) — "물리적으로 타당한 특징을 학습했다"는 근거 |
-| ⚠️ 확인 필요 | 현재 선형보간 방식은 65% 수준에 그침(논문 방법 아님). **산란점 기반 완전판(Agarwal 방법) 구현 중** — 이게 끝나야 96.4% 목표치 도전 가능. 완전판이 시간상 어려우면 "우리 구현 vs 완전판 필요성"을 정직하게 발표 |
+| ✅ 현재 결과 | **하이브리드 파이프라인(MATLAB Agarwal + Python) 완성, AT loss + log-amp 60dB → 90.9%** (논문 96.4%). 선형보간 66.6% → 산란점 기반 90.9%로 대폭 개선. MATLAB 재인증 없이 현 수치로 발표 가능 — "물리기반 증강의 효과를 확인, 완전한 재현에는 Agarwal 파라미터 미세조정 필요"로 정직 보고 |
 | 발표 문장 예시 | "few-shot(136장)에서 baseline이 논문과 유사하게 낮게 나옴을 확인 → PH 물리기반 증강으로 OO%까지 개선(논문 96.4% 대비)" |
 
 ---
@@ -82,8 +82,15 @@
 
 ## 지금 시점 우선순위 (발표 전 반드시 채워야 할 것)
 
-1. 🔴 **Exp B**: 산란점 기반 완전판 구현 완료 → few-shot 정확도 확보 (진행 중)
-2. 🔴 **Exp A**: CTx2 붕괴 원인 확인 (T5, Colab 재실행 필요)
-3. 🟡 **Exp C**: Optuna 결과 그래프/표 정리
-4. 🟡 **Exp D**: 최종 확정 수치로 `REPORT.md` 갱신
-5. 🟢 **Exp B Grad-CAM**: 완전판 모델로 재실행 (현재는 선형보간 모델 기준)
+1. ✅ **Exp B**: 하이브리드 파이프라인 완성, 90.9% 확정 (AT + log-amp 60dB)
+2. ✅ **Exp A BUG-3 수정**: `load_condition()` 분할 로직 제거 완료 → **Colab 재실행만 하면 CTx2 수치 갱신**
+3. 🟡 **Exp A Colab 재실행**: BUG-3 수정 코드로 CTx2 최종 수치 확보
+4. 🟡 **Exp C**: SAMPLE dataset으로 Optuna + CLAHE 실행 → 수치 확보
+5. 🟡 **Exp D**: ID=SAMPLE, OOD=holdout+SAR-ship → AUROC/TNR 확보
+6. 🟢 **Exp B Grad-CAM**: 90.9% 모델로 CAM↔산란점 IoU 재계산
+
+### 시각화/문서 상태
+- ✅ `core/evaluate.py`: `plot_confusion_matrix()`, `plot_accuracy_bar()` 구현 완료
+- ✅ `notebooks/visualize.ipynb`: 전 실험 시각화 노트북 작성 완료
+- ✅ `docs/REPORT.md`: 최신 결과 반영 완료
+- ✅ `gradcam/`: GradCAM + scatter_overlap IoU 모듈 구현 완료
