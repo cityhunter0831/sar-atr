@@ -106,8 +106,8 @@
 | Holdout (J=1,2,3) | 같은 SAMPLE 내 미지 클래스 (near-OOD) | 어려움 |
 | MSTAR-O/P | cross-dataset (far-OOD) | 쉬움, Maha 우세 |
 
-### 우리 개선
-- **#2 옵티마이저 비교(ADAM vs SGD)** 가 OOD 탐지에 미치는 영향 분석.
+### 우리 방법론 확장 (Exp D)
+- **ODIN vs Mahalanobis 비교** — 논문 정성 결론(Maha 우세)을 정량 재현. (팀 개선 3종은 A=SSIM / C=대비 자동조절 / B=XAI에 배치, Exp D 자체엔 별도 개선 없음)
 
 ---
 

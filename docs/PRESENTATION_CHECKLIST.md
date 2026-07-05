@@ -64,7 +64,7 @@
 | 데이터셋 | ID=SAMPLE 10클래스, OOD=Holdout(J=1,2,3) + SAR-ship(far-OOD 대체, MiniSAR 비공개 대체) |
 | 조건 | **ODIN vs Mahalanobis** 비교 |
 | 재현 비교 수치 | 우리 AUROC/TNR@95TPR **vs** 논문 Figure 9 (holdout/MSTAR-O/MSTAR-P 각각) |
-| 개선 결과 | **옵티마이저 비교(개선#2)**: ADAM vs SGD가 OOD 탐지 성능에 미치는 영향 |
+| 방법론 확장 | **ODIN vs Mahalanobis 비교** — 논문 정성 결론(Maha가 대체로 우세) 재현·정량화 (Exp D 자체엔 팀 개선 #없음; 개선 3종은 A/C/B에 배치) |
 | 발표 문장 예시 | "Mahalanobis가 far-OOD(SAR-ship)에서 거의 완벽, near-OOD(holdout)에서는 두 방법 다 어려움 — 논문의 정성적 결론과 일치" |
 
 ---
@@ -74,7 +74,7 @@
 | 항목 | 내용 |
 |---|---|
 | 재현 성공 요약표 | 4실험 × (논문 수치 / 우리 수치 / 판정) 한 표로 |
-| 우리 개선 3가지 요약 | SSIM(#1) / 옵티마이저(#2) / Grad-CAM(#3) — 각각 무엇을 보여줬는지 한 줄씩 |
+| 우리 개선 3가지 요약 | SSIM 클러터경계(#1, Exp A) / 대비 자동조절 Optuna(#2, Exp C) / XAI 산란점검증(#3, Exp B) — 각각 무엇을 보여줬는지 한 줄씩 |
 | 논문과 의도적으로 다른 점 | Exp C(SAMPLE 채택 이유), Exp D(SAR-ship 대체 이유) — `docs/DATASET_METHOD.md` 표 인용 |
 | 한계·향후 과제 | Exp B 완전판 미완성 시 명시, Exp A CTx2 원인 미확정 시 명시 — **정직하게 보고하는 것 자체가 방법론적 엄밀성으로 어필 가능** |
 

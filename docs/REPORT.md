@@ -164,7 +164,7 @@ SAR 타겟 chip을 서로 다른 배경 클러터에 합성(전이)하여 학습
 | # | 개선 | 위치 | 결과 |
 |---|---|---|---|
 | 1 | **SSIM 경계 아티팩트 정량화** | `run_boundary_ssim_analysis()` (exp_a) | SSIM 0.9472 — 클러터 전이 경계 왜곡 최소, 타겟 구조 충실 보존 정량 입증 |
-| 2 | **옵티마이저 비교 (ADAM vs SGD)** | `run_optimizer_comparison()` (exp_b), `core/train.py` | 논문은 ADAM 고정 — baseline/aug × ADAM/SGD 2×2로 "증강 이득이 옵티마이저에 무관하게 재현되는가" 검증. Colab 실행 대기(Cell 7d) |
+| 2 | **대비 자동조절 (Optuna 자동탐색)** | `exp_c_contrast_optuna.py` | 논문은 대비 레벨 3개를 근거 없이 임의 고정 — 우리는 Optuna로 대비 파라미터를 자동 최적화(재현성·객관성). 논문 3레벨 재현을 baseline으로 두고 그 위에 자동탐색을 얹음 |
 | 3 | **XAI × 산란점 IoU 검증** (Grad-CAM → 픽셀 단위 XAI로 확장) | `run_gradcam_analysis()` / `run_xai_analysis()` (exp_b) | 완전판(산란점 기반, log-amp 60dB, 90.9%) 모델로 재실행 완료. 아래 상세 |
 
 ### 개선 #3 상세 — XAI로 물리적 산란점 검증
