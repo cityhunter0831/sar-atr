@@ -41,6 +41,7 @@ from core.models import get_model
 from core.train import train_model
 from gradcam.cam import GradCAM
 from gradcam.scatter_overlap import centers_to_mask, iou as compute_iou
+from gradcam.attributions import occlusion_sensitivity, smoothgrad_ig
 
 # 논문 Table 2/3 재현: 5클래스 few-shot. train El17° / test El15°.
 # BMP2·BTR70·T72 = Targets 패키지, 2S1·ZSU23 = Mixed Targets → 세 디렉토리 모두 로드.
@@ -438,6 +439,7 @@ def run_gradcam_analysis(
     save_dir: Path = RESULTS_DIR / "gradcam",
     log_scale: bool = False,
     dyn_range_db: float = 60.0,
+    cam_from_last: int = 1,
 ) -> list[dict]:
     """
     우리 팀 개선 #3: Grad-CAM 히트맵과 공간 산란점 좌표 IoU 비교.
@@ -446,6 +448,9 @@ def run_gradcam_analysis(
     ⚠️ log_scale/dyn_range_db는 반드시 모델 학습 시 전처리와 일치시켜야 함.
     precomputed(MATLAB) aug 모델은 log_scale=True, dyn_range_db=60으로 학습됨.
     불일치 시 모델이 OOD 입력을 받아 Grad-CAM이 배경으로 흩어짐(IoU 급락).
+
+    cam_from_last: CAM 추출 층 선택. SMPL은 마지막 conv가 8×8로 거칠어 얇은 타겟을
+    못 짚음 → 기본 1(뒤에서 두 번째 conv, 16×16)로 해상도 2배 국소화 개선.
     """
     num_classes = len(CLASSES)
     model = get_model(model_name, num_classes)
@@ -498,7 +503,7 @@ def run_gradcam_analysis(
         else:
             image_t = image_lin
 
-        gcam = GradCAM(model)
+        gcam = GradCAM(model, from_last=cam_from_last)
         cam = gcam(image_t.unsqueeze(0))            # [64,64]
         gcam.remove()
 
@@ -548,6 +553,122 @@ def run_gradcam_analysis(
         print(f"  전체 평균 CAM(기준선)        = {mean_base:.3f}")
         print(f"  비율 = {ratio:.2f}×  ({'>1 → 모델이 산란점에 더 집중' if ratio > 1 else '≤1 → 산란점 밖에 집중'})")
         print(f"  평균 IoU = {mean_iou:.3f}")
+    return records
+
+
+def run_xai_analysis(
+    model_name: str = "smpl",
+    checkpoint: Path | None = None,
+    k: int = 5,
+    n_samples: int = 10,
+    save_dir: Path = RESULTS_DIR / "xai",
+    log_scale: bool = True,
+    dyn_range_db: float = 60.0,
+    methods: tuple[str, ...] = ("occlusion", "smoothgrad_ig"),
+) -> list[dict]:
+    """
+    우리 팀 개선 #3 (확장): 픽셀 단위 XAI로 산란점 정합 검증.
+
+    Grad-CAM은 SMPL 마지막 conv(8×8) 해상도에 묶여 얇은 점 산란체를 못 짚음.
+    Occlusion(인과적) + SmoothGrad-IG(공리적, 픽셀 단위)는 입력 공간에서 직접
+    어트리뷰션을 계산 → 해상도 천장 없이 산란점과 IoU/coverage 비교.
+
+    반환: 각 이미지·방법별 {file, method, iou, coverage, baseline}.
+    """
+    import torch as _torch
+    from augmentation.precomputed_aug import _normalize_amplitude
+
+    num_classes = len(CLASSES)
+    model = get_model(model_name, num_classes)
+    if checkpoint is None:
+        default_ckpt = RESULTS_DIR / f"{model_name}_ph_aug.pth"
+        if default_ckpt.exists():
+            checkpoint = default_ckpt
+    if checkpoint is not None and checkpoint.exists():
+        model.load_state_dict(_torch.load(checkpoint, map_location="cpu"))
+        print(f"Loaded checkpoint: {checkpoint}")
+    else:
+        print("⚠️  학습된 체크포인트 없음 — 결과 무의미. 먼저 run()으로 모델을 저장하세요.")
+    model.eval()
+
+    raw_files: list[Path] = []
+    if _data_available():
+        for files in _collect_raw_files(MSTAR_RAW_DIRS, CLASSES).values():
+            raw_files.extend(files)
+    if not raw_files:
+        print("[XAI] No raw files found — skipping.")
+        return []
+
+    save_dir.mkdir(parents=True, exist_ok=True)
+    method_fns = {
+        "occlusion": lambda m, t: occlusion_sensitivity(m, t.unsqueeze(0), patch=8, stride=4),
+        "smoothgrad_ig": lambda m, t: smoothgrad_ig(m, t.unsqueeze(0), steps=24, n_noise=6),
+    }
+    titles = {"occlusion": "Occlusion", "smoothgrad_ig": "SmoothGrad-IG"}
+    records: list[dict] = []
+
+    for p in raw_files[:n_samples]:
+        try:
+            amp = read_mstar_raw(p)
+        except Exception as e:
+            print(f"  Skip {p.name}: {e}")
+            continue
+
+        image_lin = amplitude_to_tensor(amp, center_crop=EXP_B_INPUT)  # [1,64,64] 선형
+        amp64 = image_lin.squeeze(0).numpy()
+        spatial_centers = extract_spatial_scattering_centers(amp64, k=k)
+        # 모델 입력은 학습 전처리(log-amp 60dB)와 일치
+        if log_scale:
+            arr = _normalize_amplitude(amp64[None, ...], log_scale=True, dyn_range_db=dyn_range_db)
+            image_t = _torch.from_numpy(arr[0]).unsqueeze(0)
+        else:
+            image_t = image_lin
+
+        h, w = amp64.shape
+        scatter_mask = centers_to_mask(spatial_centers, h, w, radius=6)
+
+        maps = {name: method_fns[name](model, image_t) for name in methods}
+
+        n_panels = 1 + len(methods)
+        fig, axes = plt.subplots(1, n_panels, figsize=(4 * n_panels, 4))
+        axes[0].imshow(amp64, cmap="gray")
+        for cy, cx in spatial_centers:
+            axes[0].plot(cx, cy, "c+", markersize=10, markeredgewidth=2)
+        axes[0].set_title("Amplitude + scatter pts"); axes[0].axis("off")
+
+        for ax, name in zip(axes[1:], methods):
+            attr = maps[name]
+            thr = float(np.percentile(attr, 80))
+            attr_bin = (attr > thr).astype(np.float32)
+            iou_v = compute_iou(scatter_mask, attr_bin, threshold=0.5)
+            center_vals = [float(attr[int(np.clip(cy, 0, h - 1)), int(np.clip(cx, 0, w - 1))])
+                           for cy, cx in spatial_centers]
+            coverage = float(np.mean(center_vals)) if center_vals else 0.0
+            baseline = float(attr.mean())
+            ax.imshow(amp64, cmap="gray")
+            ax.imshow(attr, cmap="jet", alpha=0.5)
+            for cy, cx in spatial_centers:
+                ax.plot(cx, cy, "w+", markersize=10, markeredgewidth=2)
+            ax.set_title(f"{titles[name]} (cov={coverage:.2f}, IoU={iou_v:.2f})")
+            ax.axis("off")
+            records.append({"file": p.name, "method": name, "iou": iou_v,
+                            "coverage": coverage, "baseline": baseline})
+            print(f"  {p.name:20s} {titles[name]:14s} coverage={coverage:.3f} "
+                  f"(기준선 {baseline:.3f}) IoU={iou_v:.3f}")
+        plt.tight_layout()
+        fig.savefig(save_dir / f"{p.stem}_xai.png", dpi=150)
+        plt.close(fig)
+
+    if records:
+        print(f"\n── 픽셀 단위 XAI 산란점 정합 요약 ──")
+        for name in methods:
+            rs = [r for r in records if r["method"] == name]
+            mcov = np.mean([r["coverage"] for r in rs])
+            mbase = np.mean([r["baseline"] for r in rs])
+            miou = np.mean([r["iou"] for r in rs])
+            ratio = mcov / mbase if mbase > 0 else 0.0
+            print(f"  [{titles[name]}] coverage={mcov:.3f} / 기준선={mbase:.3f} "
+                  f"/ 비율={ratio:.2f}× / 평균 IoU={miou:.3f}")
     return records
 
 

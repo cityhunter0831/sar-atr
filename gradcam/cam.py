@@ -23,19 +23,23 @@ class GradCAM:
         gcam.remove()
     """
 
-    def __init__(self, model: torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, from_last: int = 0):
+        """
+        from_last=0 → 마지막 Conv2d에서 CAM 추출 (가장 의미론적, 저해상도).
+        from_last=1 → 뒤에서 두 번째 Conv2d (한 단계 고해상도).
+        작은 모델(SMPL)은 마지막 conv 특징맵이 8×8로 매우 거칠어 얇은 타겟을 못 짚음 →
+        from_last=1(16×16)로 해상도를 2배 올리면 국소화가 크게 개선됨.
+        """
         self.model = model
         self._fmaps: torch.Tensor | None = None
         self._grads: torch.Tensor | None = None
         self._handle_f = None
-        self._hook_last_conv()
+        self._hook_conv(from_last)
 
-    def _hook_last_conv(self):
-        last_conv = None
-        for m in self.model.modules():
-            if isinstance(m, torch.nn.Conv2d):
-                last_conv = m
-        assert last_conv is not None, "No Conv2d found in model."
+    def _hook_conv(self, from_last: int):
+        convs = [m for m in self.model.modules() if isinstance(m, torch.nn.Conv2d)]
+        assert convs, "No Conv2d found in model."
+        target_conv = convs[max(0, len(convs) - 1 - from_last)]
 
         def fwd_hook(_, __, output):
             self._fmaps = output.cpu().detach()
@@ -43,7 +47,7 @@ class GradCAM:
                 self._grads = grad.cpu().detach()
             output.register_hook(_store_grad)
 
-        self._handle_f = last_conv.register_forward_hook(fwd_hook)
+        self._handle_f = target_conv.register_forward_hook(fwd_hook)
 
     def __call__(self, x: torch.Tensor, class_idx: int | None = None) -> np.ndarray:
         self.model.zero_grad()
