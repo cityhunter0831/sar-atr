@@ -24,7 +24,8 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 **우리 팀 개선 3가지 (논문에 없는 추가 기여):**
 1. SSIM 경계 아티팩트 정량화 (`run_boundary_ssim_analysis()` in exp_a) — 클러터 전이 품질 정량화
 2. 옵티마이저 비교 (ADAM vs SGD) — 논문은 ADAM 고정
-3. Grad-CAM × 산란점 IoU 검증 (`run_gradcam_analysis()` in exp_b) — 모델이 물리적 산란점을 보는지 검증
+3. XAI × 산란점 IoU 검증 (`run_gradcam_analysis()` + `run_xai_analysis()` in exp_b) — 모델이 물리적 산란점을 보는지 검증.
+   Grad-CAM은 SMPL 8×8 특징맵 해상도 한계(1.05×) → **픽셀 단위 XAI로 확장**: Occlusion(인과, 1.95×) + SmoothGrad-IG(공리적, **6.95×**). 구현 `gradcam/attributions.py`.
    (부가: Exp C에 Optuna 하이퍼파라미터 자동 탐색 — 논문은 대비 레벨 3개 고정)
 
 ---

@@ -37,7 +37,7 @@
 | 데이터셋 | MSTAR raw (Targets 패키지: BMP2/BTR70/T72 + Mixed: 2S1/ZSU23), 5클래스, **train 17°/test 15°** |
 | 조건 | **few-shot baseline(136장, MSTAR-R)** vs **PH 증강(1088장, MSTAR-Aug1)** |
 | 재현 비교 수치 | 우리 SMPL/AT 정확도 **vs** 논문 56.6%→96.4% |
-| 개선 결과 | **Grad-CAM(개선#3)**: 증강 모델의 CAM이 산란점 위치와 얼마나 겹치는지(coverage/IoU) — "물리적으로 타당한 특징을 학습했다"는 근거 |
+| 개선 결과 | **XAI(개선#3)**: 어트리뷰션이 산란점 위치에 집중하는가(coverage/IoU) — "물리적으로 타당한 특징을 학습했다"는 근거. Grad-CAM(1.05×)은 SMPL 8×8 특징맵 해상도 한계 → **픽셀 단위 XAI로 확장**: Occlusion 1.95×(인과) / **SmoothGrad-IG 6.95×**(정량, 산란점에 약 7배 집중). 정성=Occlusion, 정량=SmoothGrad-IG로 발표 |
 | ✅ 현재 결과 | **하이브리드 파이프라인(MATLAB Agarwal + Python) 완성, AT loss + log-amp 60dB → 90.9%** (논문 96.4%). 선형보간 66.6% → 산란점 기반 90.9%로 대폭 개선. MATLAB 재인증 없이 현 수치로 발표 가능 — "물리기반 증강의 효과를 확인, 완전한 재현에는 Agarwal 파라미터 미세조정 필요"로 정직 보고 |
 | 발표 문장 예시 | "few-shot(136장)에서 baseline이 논문과 유사하게 낮게 나옴을 확인 → PH 물리기반 증강으로 OO%까지 개선(논문 96.4% 대비)" |
 
@@ -87,7 +87,7 @@
 3. 🟡 **Exp A Colab 재실행**: BUG-3 수정 코드로 CTx2 최종 수치 확보
 4. 🟡 **Exp C**: SAMPLE dataset으로 Optuna + CLAHE 실행 → 수치 확보
 5. 🟡 **Exp D**: ID=SAMPLE, OOD=holdout+SAR-ship → AUROC/TNR 확보
-6. 🟢 **Exp B Grad-CAM**: 90.9% 모델로 CAM↔산란점 IoU 재계산
+6. ✅ **Exp B XAI(개선#3)**: 90.9% 모델로 재실행 완료 — Grad-CAM 1.05× / Occlusion 1.95× / SmoothGrad-IG **6.95×** (`run_xai_analysis`, Cell 7c)
 
 ### 시각화/문서 상태
 - ✅ `core/evaluate.py`: `plot_confusion_matrix()`, `plot_accuracy_bar()` 구현 완료

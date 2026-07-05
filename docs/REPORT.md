@@ -165,7 +165,26 @@ SAR 타겟 chip을 서로 다른 배경 클러터에 합성(전이)하여 학습
 |---|---|---|---|
 | 1 | **SSIM 경계 아티팩트 정량화** | `run_boundary_ssim_analysis()` (exp_a) | SSIM 0.9472 — 클러터 전이 경계 왜곡 최소, 타겟 구조 충실 보존 정량 입증 |
 | 2 | **옵티마이저 비교 (ADAM vs SGD)** | `core/train.py` | 논문은 ADAM 고정 — 증강 효과의 옵티마이저 의존성 분석 (결과 수집 예정) |
-| 3 | **Grad-CAM × 산란점 IoU 검증** | `run_gradcam_analysis()` (exp_b) | 초기(선형보간, 10epoch) 모델 기준 coverage/IoU 측정 완료. **완전판(산란점 기반) 모델로 재실행 필요** — 지금 모델은 few-shot 재설계 전 버전 |
+| 3 | **XAI × 산란점 IoU 검증** (Grad-CAM → 픽셀 단위 XAI로 확장) | `run_gradcam_analysis()` / `run_xai_analysis()` (exp_b) | 완전판(산란점 기반, log-amp 60dB, 90.9%) 모델로 재실행 완료. 아래 상세 |
+
+### 개선 #3 상세 — XAI로 물리적 산란점 검증
+
+**질문**: 모델이 실제 물리적 산란점(scattering centers)을 보고 분류하는가?
+**지표**: 어트리뷰션의 산란점 집중도 = coverage(산란점 위치 평균 어트리뷰션) / 기준선(전체 평균). >1이면 산란점에 더 집중. + 상위 20% 어트리뷰션 영역과 산란점 마스크의 IoU.
+
+**Grad-CAM의 한계**: SMPL의 마지막 conv 특징맵이 **8×8**뿐이라 얇은 점 산란체를 국소화 못 함 → 비율 **1.05×**, IoU 0.11 (해상도 천장). CAM 계열의 구조적 한계.
+
+**픽셀 단위 XAI로 확장** (완전판 90.9% 모델, El15° 실측 10장 기준):
+
+| 방법 | 성격 | 비율(coverage/기준선) | 평균 IoU |
+|---|---|---|---|
+| Grad-CAM | CAM 계열 (8×8) | 1.05× | 0.11 |
+| **Occlusion Sensitivity** | 인과적 (패치 가림) | **1.95×** | 0.21 |
+| **SmoothGrad-IG** | 공리적 (픽셀 단위) | **6.95×** | 0.27 |
+
+- **Occlusion**: 산란점 영역을 가리면 타깃 클래스 확률이 급락 → "그 영역이 분류에 인과적으로 기여"를 직접 입증.
+- **SmoothGrad-IG**: 입력 픽셀 공간에서 직접 어트리뷰션 → CAM 해상도 천장 없음. **비율 6.95× = 모델 어트리뷰션이 이미지 평균보다 산란점에 약 7배 집중**. 물리 기반 증강(산란점 재합성)으로 학습한 모델이 실제로 산란점을 근거로 분류함을 정량 입증.
+- 구현: `gradcam/attributions.py`(occlusion/IG/SmoothGrad), `gradcam/cam.py`(GradCAM `from_last` 층 선택), 산란점 추출은 타겟 영역 제한으로 배경 스페클 오검출 제거(`extract_spatial_scattering_centers`).
 
 ---
 
