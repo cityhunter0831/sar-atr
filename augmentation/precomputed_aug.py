@@ -145,7 +145,7 @@ def _find_3d(m: dict) -> np.ndarray:
     raise KeyError("3D 이미지 배열을 못 찾음")
 
 
-def load_mat_images(mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES):
+def load_mat_images(mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES, log_scale=False):
     """<*>{suffix}.mat 들을 읽어 (images[N,64,64] float32 진폭, labels[N]) 반환.
     suffix: '_aug_images' | '_baseline' | '_test'. 복소면 |·| 진폭. 시리얼→클래스 자동 병합."""
     mat_dir = Path(mat_dir)
@@ -156,6 +156,8 @@ def load_mat_images(mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES):
         if cls is None or cls not in cls_idx:
             continue
         amp = np.abs(_find_3d(_load_mat(p))).astype(np.float32)
+        if log_scale:
+            amp = 20.0 * np.log10(amp + 1e-5)
         imgs.append(amp)
         labels.append(np.full(amp.shape[0], cls_idx[cls], dtype=np.int64))
     if not imgs:
@@ -163,8 +165,8 @@ def load_mat_images(mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES):
     return np.concatenate(imgs, 0), np.concatenate(labels, 0)
 
 
-def load_aug_images(mat_dir, class_names=AUG_CLASSES):
-    return load_mat_images(mat_dir, "_aug_images", class_names)
+def load_aug_images(mat_dir, class_names=AUG_CLASSES, log_scale=False):
+    return load_mat_images(mat_dir, "_aug_images", class_names, log_scale)
 
 
 try:
@@ -179,11 +181,12 @@ class MatImagesDataset(_SARDataset):
       '_aug_images' (El17 증강 학습), '_baseline' (El17 원본 136), '_test' (El15 실측 평가).
     이미지별 [0,1] 정규화. `train_model(model, ds, test_ds, cfg)`에 바로 투입."""
 
-    def __init__(self, mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES):
+    def __init__(self, mat_dir: str | Path, suffix: str, class_names=AUG_CLASSES, log_scale=False):
         self._class_names = list(class_names)
-        imgs, labels = load_mat_images(mat_dir, suffix, class_names)
+        imgs, labels = load_mat_images(mat_dir, suffix, class_names, log_scale)
         mx = imgs.reshape(imgs.shape[0], -1).max(1)[:, None, None] + 1e-8
-        self._imgs = (imgs / mx).astype(np.float32)
+        mn = imgs.reshape(imgs.shape[0], -1).min(1)[:, None, None]
+        self._imgs = ((imgs - mn) / (mx - mn + 1e-8)).astype(np.float32)
         self._labels = labels
 
     def __len__(self):
@@ -202,19 +205,19 @@ class MatImagesDataset(_SARDataset):
 
 
 # 편의 래퍼 (용도별)
-def AugImagesDataset(mat_dir, class_names=AUG_CLASSES):
+def AugImagesDataset(mat_dir, class_names=AUG_CLASSES, log_scale=False):
     """El17° PH 증강 학습셋 (<class>_aug_images.mat)."""
-    return MatImagesDataset(mat_dir, "_aug_images", class_names)
+    return MatImagesDataset(mat_dir, "_aug_images", class_names, log_scale)
 
 
-def BaselineDataset(mat_dir, class_names=AUG_CLASSES):
+def BaselineDataset(mat_dir, class_names=AUG_CLASSES, log_scale=False):
     """El17° few-shot 원본 baseline (136장, <class>_baseline.mat)."""
-    return MatImagesDataset(mat_dir, "_baseline", class_names)
+    return MatImagesDataset(mat_dir, "_baseline", class_names, log_scale)
 
 
-def TestImagesDataset(mat_dir, class_names=AUG_CLASSES):
+def TestImagesDataset(mat_dir, class_names=AUG_CLASSES, log_scale=False):
     """El15° 실측 테스트셋 (1913장, <class>_test.mat)."""
-    return MatImagesDataset(mat_dir, "_test", class_names)
+    return MatImagesDataset(mat_dir, "_test", class_names, log_scale)
 
 
 if __name__ == "__main__":
