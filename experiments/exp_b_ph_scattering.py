@@ -446,7 +446,7 @@ def run_gradcam_analysis(
     모델이 실제 산란점 위치를 보고 분류하는지 물리적 신뢰도 검증.
 
     ⚠️ log_scale/dyn_range_db는 반드시 모델 학습 시 전처리와 일치시켜야 함.
-    precomputed(MATLAB) aug 모델은 기본 선형 진폭(log_scale=False)으로 학습됨.
+    precomputed(MATLAB) aug 모델은 log_scale=True, dyn_range_db=60으로 학습됨.
     불일치 시 모델이 OOD 입력을 받아 Grad-CAM이 배경으로 흩어짐(IoU 급락).
 
     cam_from_last: CAM 추출 층 선택. SMPL은 마지막 conv가 8×8로 거칠어 얇은 타겟을
