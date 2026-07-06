@@ -4,7 +4,7 @@
 >
 > **목표**: 논문의 4개 실험을 충실히 재현하고, 3가지 독자적 개선을 추가한다.
 >
-> **그래프 파일**: `results/figures/` 또는 Google Drive `SAR_ATR_Project/figures/`
+> **그래프 파일**: `docs/figures/` (GitHub 추적) 또는 Google Drive `SAR_ATR_Project/figures/`
 
 ---
 
@@ -41,13 +41,15 @@ SAR(합성개구면 레이더)는 날씨·주야에 관계없이 고해상도 �
 | Exp C (Table 6) | 91.9% → 94.5% (RN18) | ①69.6% ②61.8% ③**80.3%** (+18.5%p) | 개선 확인 |
 | Exp D (Fig 9) | far-OOD 쉬움 / near-OOD 어려움 | far-OOD AUROC=1.000 / near-OOD ~0.45 | 패턴 재현 |
 
-> **그래프**: 실험별 비교 그래프 5개가 `results/figures/`에 저장됨.
+> **그래프**: 실험별 비교 그래프 5개 (`docs/figures/` — Colab Cell 11 실행 시 자동 저장)
 
 ---
 
 ## 3. Exp A — 클러터 전이
 
 > **그래프**: `exp_a_clutter_transfer.png` (4조건 막대그래프, 논문 vs 우리)
+
+![Exp A — 클러터 전이 재현](figures/exp_a_clutter_transfer.png)
 
 ### 3.1 논문이 한 것
 SAR 이미지 = 표적(전차) + 클러터(배경). CNN이 배경 패턴을 외우면 배경이 달라질 때 성능 붕괴. 논문은 SAR-Bake 픽셀 주석으로 표적/그림자/클러터를 분리하고, 표적을 다른 클러터 배경에 feather blending으로 합성(클러터 전이)한다.
@@ -90,6 +92,8 @@ SAR 이미지 = 표적(전차) + 클러터(배경). CNN이 배경 패턴을 외�
 
 > **그래프**: `exp_b_confusion_matrix.png` (baseline vs aug 혼동행렬)
 
+![Exp B — Confusion Matrix](figures/exp_b_confusion_matrix.png)
+
 ### 4.1 논문이 한 것
 **핵심 문제**: 실측 SAR 데이터가 클래스당 24~32장(총 136장)뿐인 few-shot 상황.
 
@@ -128,7 +132,15 @@ SAR 이미지 = 표적(전차) + 클러터(배경). CNN이 배경 패턴을 외�
 
 ### 4.4 개선 #3 — XAI 산란점 IoU 검증
 
-> **그래프**: `exp_b_xai_iou.png` (IoU 단조증가 막대 + 방법 비교표)
+> **그래프**: `exp_b_xai_iou.png` (IoU 단조증가 막대 + 방법 비교표) / CAM 샘플: `docs/figures/cam/`
+
+![Exp B — XAI IoU 단조증가](figures/exp_b_xai_iou.png)
+
+**CAM 오버레이 샘플** (모델이 어디를 보는지 — 산란점 위에 히트맵):
+
+| Grad-CAM 16×16 샘플 1 | Grad-CAM 16×16 샘플 2 | SmoothGrad-IG 샘플 1 | SmoothGrad-IG 샘플 2 |
+|---|---|---|---|
+| ![](figures/cam/gradcam_sample_1.png) | ![](figures/cam/gradcam_sample_2.png) | ![](figures/cam/xai_sample_1.png) | ![](figures/cam/xai_sample_2.png) |
 
 **문제**: 모델이 높은 정확도를 내더라도, 물리적 산란점을 근거로 분류하는지 알 수 없다 (블랙박스).
 
@@ -155,6 +167,8 @@ SAR 이미지 = 표적(전차) + 클러터(배경). CNN이 배경 패턴을 외�
 ## 5. Exp C — 대비 증강
 
 > **그래프**: `exp_c_contrast_optuna.png` (3단계 비교 막대 + Optuna 산점도)
+
+![Exp C — 대비 증강 3단계](figures/exp_c_contrast_optuna.png)
 
 ### 5.1 논문이 한 것
 **핵심 문제**: SAMPLE 데이터셋의 합성(synthetic) 이미지는 실측(measured) 대비 배경 클러터가 약하고 대비가 다르다. synth로 학습 → real 테스트 시 붕괴 (도메인 갭).
@@ -192,6 +206,8 @@ SAR 이미지 = 표적(전차) + 클러터(배경). CNN이 배경 패턴을 외�
 ## 6. Exp D — OOD 탐지
 
 > **그래프**: `exp_d_ood.png` (AUROC 히트맵 + near/far-OOD 비교)
+
+![Exp D — OOD 탐지 AUROC](figures/exp_d_ood.png)
 
 ### 6.1 논문이 한 것
 **핵심 문제**: 실전 환경에는 학습에 없던 미지 표적(OOD)이 등장. "모르는 것을 모른다고 말할 수 있는가?"
