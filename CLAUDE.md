@@ -104,7 +104,7 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 ### ⭐ 현재 노선 = 하이브리드 (로컬 MATLAB + Colab Python) — 이게 실제 파이프라인
 OSU Box precomputed 데이터가 삭제(404)돼 지름길이 막힌 뒤, **원본 MATLAB(Agarwal repo)을 로컬에서 직접 실행**하는 방식으로 전환. Python 포팅(`ph_sparse.py`)은 원리 이해·검증용으로 남기되, **실제 증강 데이터는 MATLAB이 생성**한다.
 
-- **로컬 MATLAB (다른 채팅=Antigravity/Gemini 담당, Agarwal repo)**: stage1(PH)→stage2(희소복원)→stage3(generate)→merge. 가속 완료(장당 26분→18초): 익명함수 슬라이싱 제거, `pagemtimes`, `maxNumCompThreads(1)`, **`gaussWidth=1.0` 고정 ✅ 검증 완료** — 2S1 대표이미지에서 σ_G=1(잔차 9419.6) vs σ_G=2(잔차 9419.4) 차이 **0.002%**. 민감도 극히 낮음 정량 확인 → 재복원 불필요, 발표 방어 가능.
+- **로컬 MATLAB (다른 채팅=Antigravity/Gemini 담당, Agarwal repo)**: stage1(PH)→stage2(희소복원)→stage3(generate)→merge. **전 단계 완료 ✅** 가속 완료(장당 26분→18초): 익명함수 슬라이싱 제거, `pagemtimes`, `maxNumCompThreads(1)`, **`gaussWidth=1.0` 고정 ✅ 검증 완료** — 2S1 대표이미지에서 σ_G=1(잔차 9419.6) vs σ_G=2(잔차 9419.4) 차이 **0.002%**. 민감도 극히 낮음 정량 확인 → 재복원 불필요, 발표 방어 가능. `.mat` 파일 9개 Drive 업로드 완료.
 - **Colab Python (이 repo=sar-atr, 나 담당)**: MATLAB이 만든 `.mat`을 로드해 SMPL/AT 학습.
 - **데이터 핸드오프 = Google Drive** (두 채팅은 메모리 공유 안 함, `.mat` 파일이 인터페이스).
 
@@ -120,12 +120,12 @@ OSU Box precomputed 데이터가 삭제(404)돼 지름길이 막힌 뒤, **원�
 
 ### 진척도
 - [x] 데이터 설계 확정: 5클래스(2S1,BMP2,BTR70,T72,ZSU23), few-shot **136장 정밀분포**(24/32/24/24/32), El17train/El15test, 64×64 crop, AT손실
-- [x] 로컬 MATLAB stage1(PH) 완료, stage2(희소복원) 구동 중(막바지)
+- [x] 로컬 MATLAB stage1(PH) 완료, stage2(희소복원) 완료
 - [x] El15° test 1913장 export 완료 (장수 논문과 일치: 274/587/196/582/274)
 - [x] El17° baseline 136장 export 완료
 - [x] Python 로더 3종 완료·검증
-- [ ] **stage3(generate_aug_images) + merge → `<class>_aug_images.mat` 생성** ← 지금 대기 중
-- [ ] Drive 업로드 → Colab 학습: baseline(목표 56.6%) vs aug(목표 96.4%)
+- [x] **stage3(generate_aug_images) + merge → `<class>_aug_images.mat` 생성 완료** ✅ Drive 업로드 완료
+- [ ] Colab 학습: baseline(목표 56.6%) vs aug(목표 96.4%)
 - (참고) Python 포팅 `ph_sparse.py`: stage1 corr0.99✅, stage2 연산자 자기일관성5/5✅ + λ_max스케일링·sigma_n캘리브(`calibrate_sparse`) — 검증용, 실파이프라인은 MATLAB
 
 ---
