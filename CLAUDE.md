@@ -61,13 +61,13 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 | T2 | Exp B | 128 resize → **64×64 center-crop** | ✅ `amplitude_to_tensor(center_crop=64)` |
 | T3 | Exp B | CE → **AT(ε=2)/LSM** | ✅ `run(loss_type='at'/'lsm')` |
 | T4 | Exp B | 인접파일 보간 → **azimuth 이웃 PH 보간** | ✅ `read_azimuth` 정렬 pairing |
-| T5 | Exp A | TrainCTx2 붕괴(39%) → 회복(**96.0%**) | 🟠 진단 로깅 추가 — **Colab 실행해 폴더 로드수 확인 필요** |
+| T5 | Exp A | TrainCTx2 붕괴(39%) → 회복(**96.0%**) | ✅ 3563장 정상 로드 확인. SMPL **98.8±0.3%** / RN18 **99.9±0.1%** (논문 96.0/98.4% 초과 달성) |
 | T6 | Exp D | ID=MSTAR → **ID=SAMPLE 10클래스**, SAR-ship=far-OOD | ✅ `SampleDataset` 기반 재설계 |
 | T7 | Exp C | 목표 불명확 → K=0 **RN18 94.5%** 명시 | ✅ `_print_figure1` 수정 |
 | T8 | Exp B | σ_G 라인서치 제거 필요성 → **σ_G=1.0 고정 확정** | ✅ 2S1 대표이미지 잔차 차이 0.002% 정량 검증. 재복원 불필요. |
 | ✅ | 공통 | ~~BUG-X1~X4 (Taylor 부호/오프셋/포맷)~~ | 완료 |
 
-> **T1~T4,T6,T7은 코드 반영 완료. 실데이터 검증은 Colab 필요.** T5는 진단 로깅만 넣음(원인 확정에 Colab 실행 필요).
+> **T1~T8, BUG-X1~X4 모두 완료.** Exp A 수치 Colab 실행으로 검증 완료 (SMPL 98.8%, RN18 99.9%).
 > Exp B 실행: `run(model_name='smpl', loss_type='at')` → 목표 SMPL/AT **56.6%→96.4%** (few-shot이 핵심).
 
 ---
