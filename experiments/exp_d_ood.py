@@ -33,45 +33,77 @@ from core.models import get_model
 from core.train import train_model
 
 RESULTS_DIR = Path("results/exp_d")
-MSTAR_DIR = Path("data/mstar/mixed_targets")
 SARSHIP_DIR = Path("data/sarship")
 
-# Full 10-class MSTAR set
-ALL_CLASSES = ["BMP2", "BTR70", "T72", "2S1", "BRDM2", "BTR60", "D7", "T62", "ZIL131", "ZSU23-4"]
+# T6 재설계: 논문은 ID=SAMPLE 10클래스, OE=SAR-ship(+MiniSAR 비공개), OOD=Holdout+MSTAR-O/P.
+# SAMPLE 클래스 #0~#9 (논문 순서). exp_c의 SampleDataset 재사용.
+from experiments.exp_c_contrast_optuna import SampleDataset, SAMPLE_ROOT  # noqa: E402
+ALL_CLASSES = ["2s1", "bmp2", "btr70", "m1", "m2", "m35", "m548", "m60", "t72", "zsu23"]
 
-# Holdout combinations: J unknown classes removed from training
+# Holdout combinations: J개 SAMPLE 클래스를 학습에서 제외 (near-OOD).
+# 논문 Figure 11: M35(#5)+M548(#6) 동시 제외 시 탐지 쉬움 → 대표 조합 선택.
 HOLDOUT_CONFIGS: dict[int, list[str]] = {
-    1: ["ZSU23-4"],
-    2: ["ZSU23-4", "ZIL131"],
-    3: ["ZSU23-4", "ZIL131", "T62"],
+    1: ["m548"],
+    2: ["m35", "m548"],
+    3: ["m35", "m548", "t72"],
 }
 
 
 # ─── Dataset helpers ──────────────────────────────────────────────────────────
 
+def _has_phoenix_header(path: Path) -> bool:
+    """파일 앞 4KB만 읽어 Phoenix 헤더 존재 여부 확인."""
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(4096)
+        return b"PhoenixHeaderVer" in chunk
+    except Exception:
+        return False
+
+
 class FolderDataset(SARDataset):
     """Generic image folder dataset compatible with SARDataset interface."""
 
-    def __init__(self, root: Path, class_names: list[str], augmentation=None):
+    def __init__(self, roots: "Path | list[Path]", class_names: list[str], augmentation=None):
         self._class_names = class_names
         self._aug = augmentation
         self._samples: list[tuple[Path, int]] = []
 
-        for idx, cls in enumerate(class_names):
-            cls_dir = root / cls
-            if not cls_dir.exists():
-                continue
-            for p in sorted(cls_dir.iterdir()):
-                if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif"}:
-                    self._samples.append((p, idx))
+        if isinstance(roots, Path):
+            roots = [roots]
+
+        for root in roots:
+            for idx, cls in enumerate(class_names):
+                # 직접 경로(Targets) 또는 COL/SCENE 중간 경로(Mixed) 모두 지원
+                for p in root.rglob(f"{cls}/*"):
+                    if not p.is_file():
+                        continue
+                    # 이미지 파일이거나 Phoenix 헤더가 있는 raw 파일만 포함
+                    if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif"}:
+                        self._samples.append((p, idx))
+                    elif _has_phoenix_header(p):
+                        self._samples.append((p, idx))
 
     def __len__(self) -> int:
         return len(self._samples)
 
     def __getitem__(self, idx: int) -> SARSample:
         path, label = self._samples[idx]
-        img = Image.open(path).convert("L")
-        arr = np.array(img, dtype=np.float32) / 255.0
+        try:
+            img = Image.open(path).convert("L").resize((128, 128))
+            arr = np.array(img, dtype=np.float32) / 255.0
+        except Exception:
+            try:
+                from augmentation.ph_extraction import read_mstar_raw
+                import PIL.Image as _PILImage
+                raw = read_mstar_raw(path)
+                arr = (raw / (raw.max() + 1e-8)).astype(np.float32)
+                arr = np.array(
+                    _PILImage.fromarray((arr * 255).astype(np.uint8)).resize((128, 128)),
+                    dtype=np.float32,
+                ) / 255.0
+            except Exception:
+                arr = np.zeros((128, 128), dtype=np.float32)
         t = torch.from_numpy(arr).unsqueeze(0)
         meta = {"class_name": self._class_names[label], "source": str(path)}
         if self._aug is not None:
@@ -110,24 +142,44 @@ class SARShipDataset(SARDataset):
         return ["sarship"]
 
 
+class _SubsetWithNames(SARDataset):
+    """torch random_split이 반환하는 Subset은 class_names가 없어서
+    Mahalanobis(train_ds.class_names 참조)에서 터짐. 이를 노출하는 얇은 래퍼."""
+
+    def __init__(self, subset, class_names: list[str]):
+        self._subset = subset
+        self._class_names = class_names
+
+    def __len__(self) -> int:
+        return len(self._subset)
+
+    def __getitem__(self, idx: int) -> SARSample:
+        return self._subset[idx]
+
+    @property
+    def class_names(self) -> list[str]:
+        return self._class_names
+
+
 # ─── Data loading ─────────────────────────────────────────────────────────────
 
 def _data_available() -> bool:
-    return MSTAR_DIR.exists() and any(MSTAR_DIR.iterdir())
+    return SAMPLE_ROOT.exists() and any(SAMPLE_ROOT.iterdir())
 
 
 def load_id_holdout(
     j: int = 1, class_names: list[str] = ALL_CLASSES
 ) -> tuple[SARDataset, SARDataset, SARDataset, SARDataset]:
     """
-    Returns (train_ds, test_id_ds, test_holdout_ds, oe_ds).
-    Falls back to mock if real data absent.
+    T6 재설계: ID = SAMPLE 10클래스. Holdout = J개 SAMPLE 클래스(near-OOD),
+    OE(=OOD 교차도메인) = SAR-ship.
+    Returns (train_ds, test_id_ds, test_holdout_ds, oe_ds). 실데이터 없으면 mock.
     """
     holdout = HOLDOUT_CONFIGS[j]
     known = [c for c in class_names if c not in holdout]
 
     if not _data_available():
-        print(f"[Exp D] Real data not found at {MSTAR_DIR} — using MockSARDataset.")
+        print(f"[Exp D] SAMPLE not found at {SAMPLE_ROOT} — using MockSARDataset.")
         return (
             MockSARDataset(n=300, num_classes=len(known), seed=0),
             MockSARDataset(n=100, num_classes=len(known), seed=1),
@@ -135,16 +187,18 @@ def load_id_holdout(
             MockSARDataset(n=100, num_classes=1, seed=3),  # mock OE
         )
 
-    train_ds = FolderDataset(MSTAR_DIR, known)
-    test_id_ds = FolderDataset(MSTAR_DIR, known)
-    test_holdout_ds = FolderDataset(MSTAR_DIR, holdout)
+    # ID 학습 = SAMPLE synth(known), ID 테스트 = SAMPLE real(known) — 논문 K=0 시나리오
+    train_ds = SampleDataset(SAMPLE_ROOT, "synth", known)
+    test_id_ds = SampleDataset(SAMPLE_ROOT, "real", known)
+    # near-OOD = 학습 제외된 SAMPLE 클래스 (real)
+    test_holdout_ds = SampleDataset(SAMPLE_ROOT, "real", holdout)
 
     sar_ship = SARShipDataset(SARSHIP_DIR)
     if len(sar_ship) == 0:
         print("[Exp D] SAR-ship not found — using mock OE data.")
         oe_ds: SARDataset = MockSARDataset(n=100, num_classes=1, seed=99)
     else:
-        oe_ds = sar_ship
+        oe_ds = sar_ship  # far-OOD (cross-domain). 논문에선 OE 학습 재료로도 사용
 
     return train_ds, test_id_ds, test_holdout_ds, oe_ds
 
@@ -196,6 +250,7 @@ def run(
     save_dir: Path = RESULTS_DIR,
 ) -> list[dict]:
     save_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
     all_results = []
 
     for j in j_list:
@@ -210,8 +265,12 @@ def run(
         model = get_model(model_name, num_classes=len(known))
 
         if ckpt.exists():
-            model.load_state_dict(torch.load(ckpt, map_location="cpu"))
-            print(f"  Loaded checkpoint: {ckpt}")
+            try:
+                model.load_state_dict(torch.load(ckpt, map_location="cpu"))
+                print(f"  Loaded checkpoint: {ckpt}")
+            except RuntimeError:
+                print(f"  Checkpoint 구조 불일치 — 처음부터 학습합니다: {ckpt}")
+                ckpt = Path("nonexistent")  # force retrain
         else:
             print(f"  Training {model_name} (J={j}, seed={seed}) ...")
             config = TrainConfig(

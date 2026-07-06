@@ -28,7 +28,7 @@ from PIL import Image
 from torch import Tensor
 from torch.utils.data import ConcatDataset, Dataset
 
-from augmentation.boundary_blend import clutter_transfer
+from augmentation.boundary_blend import clutter_transfer, compute_ssim
 from core.interfaces import EvalResult, SARDataset, SARSample, TrainConfig
 from core.mock_data import MockSARDataset
 from core.models import get_model
@@ -85,7 +85,8 @@ class MSTARImageFolder(SARDataset):
 
     def __getitem__(self, idx: int) -> SARSample:
         path, label = self._samples[idx]
-        img = Image.open(path).convert("L")
+        # Convert via RGB first to avoid palette-mode artifacts
+        img = Image.open(path).convert("RGB").convert("L")
         arr = np.array(img, dtype=np.float32) / 255.0
         t = torch.from_numpy(arr).unsqueeze(0)  # [1, H, W]
 
@@ -204,11 +205,15 @@ def load_condition(
     """
     Returns (train_ds, test_ds) for the given condition.
 
-    gengzhe2015 folder mapping:
-      MSTAROR          → train+test split from 'Original MSTAR Images'
-      TrainOR+TestCT   → train from original, test from 'Train_OR_Test_CT'
-      TrainCT+TestCT   → train from 'Train_CT_Test_CT', test from same (split)
-      TrainCTx2+TestCT → train from 'Train_CTx2_Test_CT' (×2 aug), test from CT
+    gengzhe2015 폴더 구조: 각 폴더가 이미 조건별 완성본(train/test 혼합).
+    논문(El=15° train, El=17° test)에 따라 폴더 내 파일을 elevation 기반으로 분리.
+    elevation 정보가 없으면 80/20 랜덤 split으로 폴백.
+
+    조건별 논리:
+      MSTAROR          → 'Original MSTAR Images' 내에서 El split
+      TrainOR+TestCT   → Original에서 train, Train_OR_Test_CT에서 test
+      TrainCT+TestCT   → Train_CT_Test_CT에서 train, 동일 CT 조건에서 test
+      TrainCTx2+TestCT → Train_CTx2_Test_CT 전체가 train, CT test와 비교
 
     Falls back to MockSARDataset if real data is not found.
     """
@@ -224,19 +229,35 @@ def load_condition(
     ct1_ds   = MSTARImageFolder(DATA_ROOT / "Train_CT_Test_CT",   class_names)
     ct2_ds   = MSTARImageFolder(DATA_ROOT / "Train_CTx2_Test_CT", class_names)
 
+    # T5 진단: 폴더별·클래스별 로드 수 (CTx2 붕괴가 로딩 문제인지 확인)
+    def _counts(ds):
+        c = {cn: 0 for cn in class_names}
+        for _, lbl in getattr(ds, "_samples", []):
+            c[class_names[lbl]] += 1
+        return c
+    if condition == "TrainCTx2+TestCT":
+        print(f"  [T5 진단] Original: {len(orig_ds)}장 {_counts(orig_ds)}")
+        print(f"  [T5 진단] Train_CT_Test_CT: {len(ct1_ds)}장 {_counts(ct1_ds)}")
+        print(f"  [T5 진단] Train_CTx2_Test_CT: {len(ct2_ds)}장 {_counts(ct2_ds)}")
+        if len(ct2_ds) == 0:
+            print("  ⚠️  CTx2 폴더 0장 로드 — 폴더 구조/클래스명 확인 필요 (붕괴 원인)")
+
+    # gengzhe2015: 각 폴더는 이미 조건별 완성본.
+    # MSTAROR만 train/test 분리 필요 (원본 간 비교).
+    # CT 조건들은 폴더명이 역할을 명시 (Train_X_Test_Y):
+    #   - TrainOR+TestCT: Original 전체가 train, Train_OR_Test_CT 전체가 test
+    #   - TrainCT+TestCT: Train_CT_Test_CT를 train/test로 80/20 split (같은 도메인)
+    #   - TrainCTx2+TestCT: Train_CTx2_Test_CT 전체가 train, CT test
     orig_train, orig_test = _split_dataset(orig_ds, train_ratio=0.8, seed=seed)
-    _, ct_test            = _split_dataset(ct_or_ds, train_ratio=0.8, seed=seed)
-    ct1_train, _          = _split_dataset(ct1_ds,   train_ratio=0.8, seed=seed)
-    ct2_train, _          = _split_dataset(ct2_ds,   train_ratio=0.8, seed=seed)
 
     if condition == "MSTAROR":
         return orig_train, orig_test
     elif condition == "TrainOR+TestCT":
-        return orig_train, ct_test
+        return orig_ds, ct_or_ds
     elif condition == "TrainCT+TestCT":
-        return ct1_train, ct_test
+        return ct1_ds, ct_or_ds
     elif condition == "TrainCTx2+TestCT":
-        return ct2_train, ct_test
+        return ct2_ds, ct_or_ds
     else:
         raise ValueError(f"Unknown condition: {condition!r}")
 
@@ -246,6 +267,83 @@ def load_condition(
 SEEDS = [0, 1, 2]
 CONDITIONS: list[Condition] = ["MSTAROR", "TrainOR+TestCT", "TrainCT+TestCT", "TrainCTx2+TestCT"]
 MODEL_NAMES = ["smpl", "resnet18"]
+
+
+class _SyntheticClutterPool:
+    """clutter_bg 폴더가 없을 때 쓰는 합성 SAR 클러터 배경 풀.
+
+    SAR amplitude 클러터는 Rayleigh 분포를 따름 → |N(0,1)+jN(0,1)| 로 생성.
+    경계 아티팩트(feather 이음새) 정량화에는 실제 배경이 아니어도 무방 —
+    측정 대상은 '블렌딩이 타겟 경계를 얼마나 바꾸는가'이지 배경의 정체가 아님.
+    """
+
+    def __init__(self, image_size: int = 128, seed: int = 0):
+        self._size = image_size
+        self._rng = np.random.default_rng(seed)
+
+    def sample(self) -> "Tensor":
+        re = self._rng.standard_normal((self._size, self._size))
+        im = self._rng.standard_normal((self._size, self._size))
+        amp = np.hypot(re, im).astype(np.float32)   # Rayleigh amplitude
+        amp = amp / (amp.max() + 1e-8)
+        return torch.from_numpy(amp).unsqueeze(0)
+
+
+def run_boundary_ssim_analysis(
+    n_samples: int = 20,
+    seed: int = 0,
+    save_dir: Path = RESULTS_DIR,
+) -> dict:
+    """
+    우리 팀 개선 #1: clutter transfer 경계 아티팩트를 SSIM으로 정량화.
+    원본 chip vs feather_blend 결과의 SSIM을 측정해 경계 품질 검증.
+
+    clutter_bg/ 폴더가 있으면 실제 배경 사용, 없으면 합성 SAR 클러터로 폴백.
+    """
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    if not _data_available():
+        print("[SSIM] Real data not available — skipping.")
+        return {}
+
+    bg_dir = DATA_ROOT / "clutter_bg"
+    if bg_dir.exists() and (sorted(bg_dir.glob("*.png")) or sorted(bg_dir.glob("*.jpg"))):
+        bg_pool: object = ClutterBgPool(bg_dir, seed=seed)
+        bg_source = "real"
+        print(f"[SSIM] Using real clutter backgrounds from {bg_dir}")
+    else:
+        bg_pool = _SyntheticClutterPool(seed=seed)
+        bg_source = "synthetic"
+        print(f"[SSIM] No clutter_bg dir — using synthetic SAR-speckle backgrounds.")
+
+    orig_ds = MSTARImageFolder(DATA_ROOT / "Original MSTAR Images", TABLE4_CLASSES)
+    if len(orig_ds) == 0:
+        print("[SSIM] 'Original MSTAR Images' 비어있음 — skipping.")
+        return {}
+
+    import random as _rng
+    rng = _rng.Random(seed)
+    indices = rng.sample(range(len(orig_ds)), min(n_samples, len(orig_ds)))
+
+    ssim_scores = []
+    for i in indices:
+        sample = orig_ds[i]
+        bg = bg_pool.sample()
+        blended = clutter_transfer(sample.image, bg, method="feather")
+        score = compute_ssim(sample.image, blended)
+        ssim_scores.append(score)
+
+    mean_ssim = float(np.mean(ssim_scores)) if ssim_scores else 0.0
+    std_ssim  = float(np.std(ssim_scores))  if ssim_scores else 0.0
+    print(f"[SSIM] Boundary SSIM (original vs feather-blended, bg={bg_source}): "
+          f"{mean_ssim:.4f} ± {std_ssim:.4f}  (n={len(ssim_scores)})")
+
+    result = {"mean_ssim": mean_ssim, "std_ssim": std_ssim,
+              "n": len(ssim_scores), "bg_source": bg_source}
+    import json as _json
+    with open(save_dir / "boundary_ssim.json", "w") as f:
+        _json.dump(result, f, indent=2)
+    return result
 
 
 def run_all(epochs: int = 60, save_dir: Path = RESULTS_DIR) -> dict:
@@ -307,5 +405,9 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=60)
+    parser.add_argument("--ssim", action="store_true", help="SSIM 경계 아티팩트 분석만 실행")
     args = parser.parse_args()
-    run_all(epochs=args.epochs)
+    if args.ssim:
+        run_boundary_ssim_analysis()
+    else:
+        run_all(epochs=args.epochs)

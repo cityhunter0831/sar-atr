@@ -40,3 +40,4 @@ optuna.db
 *.log
 runs/
 wandb/
+*.pdf

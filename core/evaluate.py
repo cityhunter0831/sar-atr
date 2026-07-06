@@ -110,7 +110,7 @@ def _mahalanobis_scores(
         scores = []
         for f in feats:
             dists = [float((f - mu) @ cov_inv @ (f - mu)) for mu in means]
-            scores.append(-min(dists))  # negative distance → higher = more ID
+            scores.append(-0.5 * min(dists))  # negative Mahalanobis distance → higher = more ID
         return np.array(scores)
 
     return _score(test_ds), _score(ood_ds)
@@ -137,7 +137,7 @@ def _odin_scores(
             loss.backward()
             perturbed = (imgs - epsilon * imgs.grad.sign()).detach().clamp(0.0, 1.0)
             with torch.no_grad():
-                s = F.softmax(model(perturbed) / temperature, dim=1).max(1).values
+                s = F.softmax(model(perturbed), dim=1).max(1).values  # perturbation 후 unscaled
             scores.append(s.cpu().numpy())
         return np.concatenate(scores)
 
@@ -196,3 +196,71 @@ def evaluate_ood(
         auroc=auroc,
         tnr_at_95tpr=tnr,
     )
+
+
+# ─── Visualization ──────────────────────────────────────────────────────────
+
+def plot_confusion_matrix(
+    result: EvalResult,
+    class_names: list[str],
+    title: str = "",
+    save_path=None,
+) -> None:
+    """Confusion matrix heatmap. Requires seaborn + matplotlib."""
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    cm = np.array(result.confusion_matrix)
+    fig, ax = plt.subplots(figsize=(max(6, len(class_names) * 0.8),
+                                    max(5, len(class_names) * 0.7)))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=class_names, yticklabels=class_names, ax=ax)
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("True")
+    if title:
+        ax.set_title(title)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_accuracy_bar(
+    results_dict: dict,
+    title: str = "",
+    save_path=None,
+) -> None:
+    """Bar chart of accuracy per condition with error bars (mean +/- std).
+
+    Args:
+        results_dict: {label: {"mean": float, "std": float}} or
+                      {label: float} for simple values.
+    """
+    import matplotlib.pyplot as plt
+
+    labels = list(results_dict.keys())
+    means, stds = [], []
+    for v in results_dict.values():
+        if isinstance(v, dict):
+            means.append(v.get("mean", 0))
+            stds.append(v.get("std", 0))
+        else:
+            means.append(float(v))
+            stds.append(0)
+
+    fig, ax = plt.subplots(figsize=(max(6, len(labels) * 1.2), 5))
+    x = np.arange(len(labels))
+    bars = ax.bar(x, means, yerr=stds, capsize=5, color="#4C72B0", edgecolor="black", width=0.6)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_ylabel("Accuracy (%)")
+    if title:
+        ax.set_title(title)
+    ax.set_ylim(0, 105)
+    for bar, m in zip(bars, means):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
+                f"{m:.1f}%", ha="center", va="bottom", fontsize=9)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
