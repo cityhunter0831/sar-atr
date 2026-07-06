@@ -19,7 +19,7 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 - Exp C: 대비 보정 Figure1/Table6 — SAMPLE 10클래스, K=0(100% synth)→measured, 목표 RN18 94.5%
 - Exp D: OOD 탐지 — **ID=SAMPLE 10클래스**, OE=SAR-ship+MiniSAR, OOD=Holdout+MSTAR-O/P
 
-⚠️ **현재 코드는 논문과 여러 곳이 다름** (특히 Exp B는 few-shot이 아니라 전체 데이터로 학습 중 → 98% 나옴). PAPER_SPEC.md의 "현재 코드와의 차이" 표 참조.
+✅ **T1~T4, T6~T8, BUG-X1~X4 모두 코드 반영 완료.** Exp B는 MATLAB 희소복원 .mat 데이터 기반으로 재설계됨 (`augmentation/precomputed_aug.py`). T5(Exp A TrainCTx2)는 Colab 실행으로 수치 확인 예정.
 
 **우리 팀 개선 3가지 (논문에 없는 추가 기여):**
 1. SSIM 경계 아티팩트 정량화 (`run_boundary_ssim_analysis()` in exp_a) — 클러터 전이 품질 정량화
