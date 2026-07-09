@@ -73,12 +73,17 @@ def _has_phoenix_header(path: Path) -> bool:
 
 
 def _collect_raw_files(
-    roots: "Path | list[Path]", classes: list[str]
+    roots: "Path | list[Path]", classes: list[str],
+    aliases: dict[str, list[str]] | None = None,
 ) -> dict[str, list[Path]]:
     """Mixed Targets 디렉토리(들)에서 클래스별 raw 파일 목록 수집.
-    여러 디스크(CD1+CD2)를 합산 지원. Phoenix 헤더 없는 파일은 제외."""
+    여러 디스크(CD1+CD2)를 합산 지원. Phoenix 헤더 없는 파일은 제외.
+    aliases 생략 시 모듈 기본 CLASS_ALIASES(Exp B 5클래스) 사용 — 다른 클래스 집합
+    (예: Exp D의 MSTAR-O 5클래스)을 수집하려면 별도 aliases dict를 넘기면 된다."""
     if isinstance(roots, Path):
         roots = [roots]
+    if aliases is None:
+        aliases = CLASS_ALIASES
 
     result: dict[str, list[Path]] = {c: [] for c in classes}
 
@@ -88,7 +93,7 @@ def _collect_raw_files(
         substring이 아니라 part가 alias로 시작하는지로 판별해야 오분류 방지."""
         parts = path.parts
         for cls in classes:
-            for alias in CLASS_ALIASES.get(cls, [cls]):
+            for alias in aliases.get(cls, [cls]):
                 al = alias.lower()
                 for part in parts:
                     pl = part.lower()

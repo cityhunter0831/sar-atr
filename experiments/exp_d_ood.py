@@ -46,6 +46,22 @@ from experiments.exp_c_contrast_optuna import (  # noqa: E402
 )
 ALL_CLASSES = SAMPLE_CLASSES
 
+# MSTAR-O (논문 Section 1/4.4.1, 원문 이미지 확정): BRDM2/BTR60/D7/T62/ZIL131 —
+# Exp A/B 5클래스와 다른 Mixed Targets 나머지 5클래스. 공식 raw에서 MATLAB 없이도
+# amplitude만 뽑으면 재현 가능(논문: "self-generated with Matlab based on the official
+# MSTAR raw data" — 우리는 단순 진폭 렌더링만 하므로 완전히 동일하진 않을 수 있음).
+from experiments.exp_b_ph_scattering import _collect_raw_files, MSTAR_RAW_DIRS  # noqa: E402
+from augmentation.ph_extraction import read_mstar_raw, amplitude_to_tensor  # noqa: E402
+
+MSTAR_O_CLASSES = ["BRDM2", "BTR60", "D7", "T62", "ZIL131"]
+MSTAR_O_ALIASES = {
+    "BRDM2": ["BRDM2", "BRDM_2", "brdm2", "brdm_2"],
+    "BTR60": ["BTR60", "BTR_60", "btr60", "btr_60"],
+    "D7":    ["D7", "d7"],
+    "T62":   ["T62", "t62"],
+    "ZIL131": ["ZIL131", "zil131"],
+}
+
 # Holdout combinations: J개 SAMPLE 클래스를 학습에서 제외 (near-OOD).
 # 논문 Section 4.4.2 HLD1/2/3 (원문 페이지 이미지로 확정, Figure 11 본문
 # "#5 (M35) and #6 (M548)... the only two trucks in the SAMPLE dataset"와
@@ -151,6 +167,47 @@ class SARShipDataset(SARDataset):
         return ["sarship"]
 
 
+class MSTARODataset(SARDataset):
+    """MSTAR-O — 논문 Figure 9의 far-OOD 테스트셋. BRDM2/BTR60/D7/T62/ZIL131
+    5클래스를 Mixed Targets CD1/CD2 공식 raw에서 수집(MATLAB 없이 amplitude만 렌더링)."""
+
+    def __init__(self, files_by_class: dict[str, list[Path]], class_names: list[str]):
+        self._class_names = class_names
+        self._samples: list[tuple[Path, int]] = []
+        for idx, cls in enumerate(class_names):
+            for p in files_by_class.get(cls, []):
+                self._samples.append((p, idx))
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    def __getitem__(self, idx: int) -> SARSample:
+        path, label = self._samples[idx]
+        try:
+            amp = read_mstar_raw(path)
+        except Exception:
+            amp = np.zeros((128, 128), dtype=np.float32)
+        t = amplitude_to_tensor(amp)  # 128×128, Exp D 다른 데이터셋과 동일 해상도
+        return SARSample(image=t, label=label,
+                         meta={"class_name": self._class_names[label], "source": str(path)})
+
+    @property
+    def class_names(self) -> list[str]:
+        return self._class_names
+
+
+def load_mstar_o() -> "SARDataset | None":
+    """MSTAR-O 5클래스 raw 수집. 데이터 없으면 None(mock 대체 안 함 — sarship과 동일 원칙)."""
+    files_by_class = _collect_raw_files(MSTAR_RAW_DIRS, MSTAR_O_CLASSES, aliases=MSTAR_O_ALIASES)
+    counts = {c: len(v) for c, v in files_by_class.items()}
+    total = sum(counts.values())
+    if total == 0:
+        print(f"[Exp D] MSTAR-O 없음 at {MSTAR_RAW_DIRS} — far-OOD(mstar_o) 비교를 건너뜁니다.")
+        return None
+    print(f"[Exp D] MSTAR-O 로드: {counts} (합계 {total}장, 논문 1290장)")
+    return MSTARODataset(files_by_class, MSTAR_O_CLASSES)
+
+
 class _SubsetWithNames(SARDataset):
     """torch random_split이 반환하는 Subset은 class_names가 없어서
     Mahalanobis(train_ds.class_names 참조)에서 터짐. 이를 노출하는 얇은 래퍼."""
@@ -227,23 +284,27 @@ def run_ood_experiment(
     holdout_ds: SARDataset,
     oe_ds: "SARDataset | None",
     j: int,
+    mstar_o_ds: "SARDataset | None" = None,
 ) -> dict:
-    """Run both ODIN and Mahalanobis on holdout + SAR-ship OOD.
+    """Run ODIN and Mahalanobis on holdout(near-OOD) + mstar_o(far-OOD, 논문 Figure 9
+    재현) + sarship(far-OOD, 우리가 추가한 보조 검증 — 논문 Figure 9엔 없음).
 
-    oe_ds=None (SAR-ship 데이터 없음) 이면 sarship 비교는 건너뛰고 None으로 남긴다 —
+    oe_ds/mstar_o_ds가 None(데이터 없음)이면 해당 비교는 건너뛰고 None으로 남긴다 —
     mock으로 대체해 의미 없는 숫자를 결과에 섞지 않기 위함.
     """
     model.eval()
     results = {"j": j}
 
     ood_targets = [("holdout", holdout_ds)]
-    if oe_ds is not None:
-        ood_targets.append(("sarship", oe_ds))
-    else:
-        print("  [SKIP] sarship — SAR-ship 데이터 없음 (data/sarship 확인 필요)")
-        for method in ["odin", "mahalanobis"]:
-            results[f"{method}_sarship_auroc"] = None
-            results[f"{method}_sarship_tnr95"] = None
+    for name, ds, hint in [("mstar_o", mstar_o_ds, "Mixed Targets CD1/CD2 raw 확인"),
+                            ("sarship", oe_ds, "data/sarship 확인")]:
+        if ds is not None:
+            ood_targets.append((name, ds))
+        else:
+            print(f"  [SKIP] {name} — 데이터 없음 ({hint})")
+            for method in ["odin", "mahalanobis"]:
+                results[f"{method}_{name}_auroc"] = None
+                results[f"{method}_{name}_tnr95"] = None
 
     for ood_name, ood_ds in ood_targets:
         for method in ["odin", "mahalanobis"]:
@@ -283,6 +344,8 @@ def run(
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     all_results = []
 
+    mstar_o_ds = load_mstar_o()  # J와 무관 — 한 번만 로드
+
     for j in j_list:
         print(f"\n── J={j} holdout classes: {HOLDOUT_CONFIGS[j]} ────────────────")
         holdout = HOLDOUT_CONFIGS[j]
@@ -316,7 +379,8 @@ def run(
             print(f"  Train → Test ID accuracy: {train_result.accuracy * 100:.1f}%")
             torch.save(model.state_dict(), ckpt)
 
-        rec = run_ood_experiment(model, train_ds, test_id_ds, holdout_ds, oe_ds, j)
+        rec = run_ood_experiment(model, train_ds, test_id_ds, holdout_ds, oe_ds, j,
+                                 mstar_o_ds=mstar_o_ds)
         all_results.append(rec)
 
     with open(save_dir / "metrics.json", "w") as f:
@@ -334,7 +398,7 @@ def _print_summary(results: list[dict]):
     for rec in results:
         j = rec["j"]
         for method in ["odin", "mahalanobis"]:
-            for ood in ["holdout", "sarship"]:
+            for ood in ["holdout", "mstar_o", "sarship"]:
                 auroc = rec.get(f"{method}_{ood}_auroc")
                 tnr = rec.get(f"{method}_{ood}_tnr95")
                 auroc_s = f"{auroc:.3f}" if auroc is not None else "  N/A"
