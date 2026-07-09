@@ -258,9 +258,15 @@ def load_id_holdout(
             MockSARDataset(n=100, num_classes=1, seed=3),  # mock OE
         )
 
-    # ID 학습 = SAMPLE synth(known)+real 일부(K 비율 혼합), ID 테스트 = 학습에 안 쓴 나머지 real
+    # ID 학습 = SAMPLE synth(known)+real 일부(K 비율 혼합), ID 테스트 = 학습에 안 쓴 나머지 real.
+    # 논문 Section 3: Standard 시나리오(Exp D)도 synth에 3단계 대비 증강을 적용 —
+    # mat_files가 있으면 그걸로, 없으면(아직 Colab에 안 받았을 수 있음) PNG로 폴백.
     print(f"[Exp D] K={k} 혼합 데이터 구성 (known={len(known)}클래스)")
-    train_ds, test_id_ds = make_k_mixed_datasets(known, k=k, seed=seed)
+    try:
+        train_ds, test_id_ds = make_k_mixed_datasets(known, k=k, seed=seed, use_contrast=True)
+    except Exception as e:
+        print(f"  [Exp D] 대비 증강(mat_files) 사용 불가({e}) — PNG(대비 증강 없음)로 폴백")
+        train_ds, test_id_ds = make_k_mixed_datasets(known, k=k, seed=seed, use_contrast=False)
     # near-OOD = 학습 제외된 SAMPLE 클래스 (real)
     test_holdout_ds = SampleDataset(SAMPLE_ROOT, "real", holdout)
 

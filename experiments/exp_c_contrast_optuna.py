@@ -34,6 +34,7 @@ from core.train import train_model
 RESULTS_DIR = Path("results/exp_c")
 DATA_ROOT = Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD2")
 SAMPLE_ROOT = Path("data/sample/png_images/decibel")
+SAMPLE_MAT_ROOT = Path("data/sample/mat_files")  # 복소 원본 — sample_mat.py 전용, PNG와 다른 폴더
 FIGURE1_CLASSES = ["2S1", "BRDM_2", "ZSU_23_4"]  # 실제 폴더명 (언더스코어)
 # SAMPLE dataset 클래스 (BMP2, BTR70, T72 등 MSTAR와 동일)
 # 논문 Figure 10 캡션 순서와 동일(#0~#9 = 2S1,BMP2,BTR70,M1,M2,M35,M548,M60,T72,ZSU23).
@@ -101,6 +102,20 @@ class ElevationFilteredDataset(SARDataset):
     @property
     def class_names(self) -> list[str]:
         return self._class_names
+
+
+class GaussianNoiseAug:
+    """논문 Section 4.3 'Gaus' 레시피 — 학습 시 입력에 가우시안 노이즈를 얹는
+    train-only 정규화. AugmentedWrapper와 함께 쓴다(__getitem__마다 새로 샘플링돼
+    epoch마다 다른 노이즈가 적용됨)."""
+
+    def __init__(self, std: float):
+        self.std = std
+
+    def __call__(self, image: torch.Tensor, meta: dict) -> torch.Tensor:
+        if self.std <= 0:
+            return image
+        return (image + torch.randn_like(image) * self.std).clamp(0.0, 1.0)
 
 
 class AugmentedWrapper(SARDataset):
@@ -285,32 +300,35 @@ class _ConcatSARDataset(SARDataset):
         return self._class_names
 
 
-def make_k_mixed_datasets(
+def split_real_by_k(
     class_names: list[str] = SAMPLE_CLASSES,
     k: float = 0.1,
     seed: int = 0,
+    n_synth_per_class: dict[str, int] | None = None,
 ) -> tuple[SARDataset, SARDataset]:
     """
-    논문 Section 4.3 K 정의 재현: K = 학습셋 중 실측(measured) 샘플의 비율
-    (K=0 → 100% synthetic, K=1 → 100% measured). Exp C/D 공용.
+    논문 Section 4.3 K 정의(학습셋 중 실측 비율)에 맞춰 real 풀을 클래스별로
+    train(K 비율)/test(나머지)로 나눈다. Exp C(Ori/Aug 조건 공용) + Exp D가
+    "같은 real 분할"을 쓸 수 있도록 분리해 노출 — synth 쪽(PNG vs 복소 mat
+    렌더링)이 조건마다 달라도 real 분할은 재현 가능하게 동일 seed로 고정.
 
-    synth은 전량(K=0 baseline과 동일 규모) 사용. real은 클래스별로 K/(1-K) 비율만큼
-    무작위로 뽑아 학습에 섞고, 학습에 쓰지 않은 나머지 real만 평가(test_id_ds)에
-    쓴다 — 같은 real 이미지가 학습·평가 양쪽에 들어가는 누수를 방지.
+    n_synth_per_class 생략 시 SampleDataset(synth)의 클래스별 장수를 사용
+    (기본 K=0 baseline 규모 기준 K/(1-K) 비율 계산).
 
-    K=0이면 (synth_ds, real_ds) 그대로 반환해 기존 K=0 경로와 동일하게 동작.
+    Returns (train_real_ds, test_real_ds). k<=0이면 (빈 데이터셋, real_ds 전체).
     """
-    synth_ds = SampleDataset(SAMPLE_ROOT, "synth", class_names)
     real_ds = SampleDataset(SAMPLE_ROOT, "real", class_names)
     if k <= 0:
-        return synth_ds, real_ds
+        return IndexSubset(real_ds, []), real_ds
+
+    if n_synth_per_class is None:
+        synth_ds = SampleDataset(SAMPLE_ROOT, "synth", class_names)
+        n_synth_per_class = {}
+        for _, label in synth_ds._samples:
+            cls = class_names[label]
+            n_synth_per_class[cls] = n_synth_per_class.get(cls, 0) + 1
 
     rng = np.random.default_rng(seed)
-
-    synth_by_class: dict[int, int] = {}
-    for _, label in synth_ds._samples:
-        synth_by_class[label] = synth_by_class.get(label, 0) + 1
-
     real_by_class: dict[int, list[int]] = {}
     for i, (_, label) in enumerate(real_ds._samples):
         real_by_class.setdefault(label, []).append(i)
@@ -320,15 +338,63 @@ def make_k_mixed_datasets(
     for label, idxs in real_by_class.items():
         idxs = list(idxs)
         rng.shuffle(idxs)
-        n_synth_cls = synth_by_class.get(label, 0)
+        n_synth_cls = n_synth_per_class.get(class_names[label], 0)
         n_real_train = min(len(idxs), max(1, round(k / (1 - k) * n_synth_cls))) if n_synth_cls > 0 else 0
         train_real_idx.extend(idxs[:n_real_train])
         test_real_idx.extend(idxs[n_real_train:])
 
-    train_real_ds = IndexSubset(real_ds, train_real_idx)
-    test_id_ds = IndexSubset(real_ds, test_real_idx)
+    return IndexSubset(real_ds, train_real_idx), IndexSubset(real_ds, test_real_idx)
+
+
+def make_k_mixed_datasets(
+    class_names: list[str] = SAMPLE_CLASSES,
+    k: float = 0.1,
+    seed: int = 0,
+    use_contrast: bool = False,
+) -> tuple[SARDataset, SARDataset]:
+    """
+    논문 Section 4.3 K 정의 재현: K = 학습셋 중 실측(measured) 샘플의 비율
+    (K=0 → 100% synthetic, K=1 → 100% measured). Exp C/D 공용.
+
+    synth은 전량(K=0 baseline과 동일 규모) 사용. real은 클래스별로 K/(1-K) 비율만큼
+    무작위로 뽑아 학습에 섞고, 학습에 쓰지 않은 나머지 real만 평가(test_id_ds)에
+    쓴다 — 같은 real 이미지가 학습·평가 양쪽에 들어가는 누수를 방지.
+
+    use_contrast=True면 synth을 PNG 대신 복소 mat 기반 3단계 고정 대비
+    (SampleContrastDataset, augmentation/sample_mat.py)로 로드한다 — 논문
+    Section 3가 "Standard 시나리오(Exp D)도 대비 증강을 쓴다"고 명시한 부분 재현.
+    mat_files가 없으면 예외가 나므로, 없을 가능성이 있는 호출부는 try/except로 감쌀 것.
+
+    K=0이면 (synth_ds, real_ds) 그대로 반환해 기존 K=0 경로와 동일하게 동작.
+    """
+    if use_contrast:
+        from augmentation.sample_mat import SampleContrastDataset
+        synth_ds: SARDataset = SampleContrastDataset(SAMPLE_MAT_ROOT, "synth", class_names)
+        if len(synth_ds) == 0:
+            raise FileNotFoundError(
+                f"use_contrast=True인데 {SAMPLE_MAT_ROOT}/synth에서 .mat을 못 찾음 — "
+                "mat_files 미다운로드 가능성. 조용히 빈 데이터셋으로 진행하지 않고 예외를 던짐."
+            )
+    else:
+        synth_ds = SampleDataset(SAMPLE_ROOT, "synth", class_names)
+
+    if k <= 0:
+        real_ds = SampleDataset(SAMPLE_ROOT, "real", class_names)
+        return synth_ds, real_ds
+
+    # real/synth 비율 계산은 항상 '실제 synth 원본 장수'(PNG 기준) — use_contrast=True여도
+    # 3배 뻥튀기된 개수가 아니라 원본 806장 규모를 기준으로 K를 정의해야 논문 정의와 맞음.
+    n_synth_per_class = None
+    if use_contrast:
+        plain_synth = SampleDataset(SAMPLE_ROOT, "synth", class_names)
+        n_synth_per_class = {}
+        for _, label in plain_synth._samples:
+            cls = class_names[label]
+            n_synth_per_class[cls] = n_synth_per_class.get(cls, 0) + 1
+
+    train_real_ds, test_id_ds = split_real_by_k(class_names, k, seed, n_synth_per_class)
     train_mixed = _ConcatSARDataset([synth_ds, train_real_ds])
-    print(f"  K={k}: synth {len(synth_ds)}장 + real(train) {len(train_real_ds)}장 "
+    print(f"  K={k} (contrast={use_contrast}): synth {len(synth_ds)}장 + real(train) {len(train_real_ds)}장 "
           f"= 학습 {len(train_mixed)}장, 평가용 real(test) {len(test_id_ds)}장")
     return train_mixed, test_id_ds
 
@@ -541,6 +607,83 @@ def _print_figure1(acc_no_aug: float, acc_aug: float,
     print("──────────────────────────────────────────────────")
 
 
+def run_paper_faithful(
+    model_names: list[str] = ("smpl_paper", "aconv_paper", "resnet18_paper", "heiligers_paper"),
+    k_values: list[float] = (0.0, 0.05, 0.1),
+    seeds: list[int] = (0, 1, 2),
+    epochs: int = 60,
+    class_names: list[str] = SAMPLE_CLASSES,
+    save_dir: Path = RESULTS_DIR / "paper_faithful",
+) -> dict:
+    """
+    논문 Table 6 재현 시도: 4모델 × K(0/0.05/0.1) × {Ori, Aug} × 여러 seed.
+
+    Ori = synth(PNG) 전량 + real(train, K비율) — 대비 증강 없음.
+    Aug = synth **복소 mat 3단계 고정 대비**(SampleContrastDataset, 806→2418) +
+          동일 real(train, Ori와 같은 seed로 분할해 공정 비교) + Gaussian noise 주입.
+    두 조건 모두 같은 real(test) 분할로 평가.
+
+    이 함수는 기존 run()(ColorJitter+Optuna, 우리 팀 개선 #2)과 별개이며,
+    "논문을 최대한 그대로 재현"하는 경로다 — 개선 #2는 그대로 유지.
+
+    ⚠️ Colab에서만 검증 가능(SAMPLE mat_files 필요, 로컬 개발 환경엔 실데이터 없음).
+    """
+    from core.models_paper import get_paper_model, PAPER_RECIPE
+    from augmentation.sample_mat import SampleContrastDataset
+
+    save_dir.mkdir(parents=True, exist_ok=True)
+    results: dict = {}
+    n_classes = len(class_names)
+
+    for model_name in model_names:
+        recipe = PAPER_RECIPE[model_name]
+        results[model_name] = {}
+        for k in k_values:
+            ori_accs: list[float] = []
+            aug_accs: list[float] = []
+            for seed in seeds:
+                train_real_ds, test_id_ds = split_real_by_k(class_names, k, seed)
+
+                synth_png_ds = SampleDataset(SAMPLE_ROOT, "synth", class_names)
+                ori_train = _ConcatSARDataset([synth_png_ds, train_real_ds]) if k > 0 else synth_png_ds
+
+                synth_mat_ds = SampleContrastDataset(SAMPLE_MAT_ROOT, "synth", class_names)
+                aug_base = _ConcatSARDataset([synth_mat_ds, train_real_ds]) if k > 0 else synth_mat_ds
+                aug_train = AugmentedWrapper(aug_base, GaussianNoiseAug(recipe["gaus"]))
+
+                cfg = TrainConfig(model_name=model_name, num_classes=n_classes, epochs=epochs,
+                                  seed=seed, label_smoothing=recipe["lblsm"])
+
+                for train_ds, acc_list, tag in [(ori_train, ori_accs, "Ori"), (aug_train, aug_accs, "Aug")]:
+                    model = get_paper_model(model_name, n_classes, drop_prob=recipe["drop"])
+                    model, _ = train_model(model, train_ds, test_id_ds, cfg)
+                    acc = evaluate(model, test_id_ds).accuracy * 100
+                    acc_list.append(acc)
+                    print(f"  [{model_name}] K={k} seed={seed} {tag}: {acc:.1f}%")
+
+            def _stat(accs: list[float]) -> dict:
+                return {"min": float(np.min(accs)), "max": float(np.max(accs)),
+                       "avg": float(np.mean(accs)), "std": float(np.std(accs))}
+            results[model_name][f"K={k}"] = {"Ori": _stat(ori_accs), "Aug": _stat(aug_accs)}
+
+    with open(save_dir / "table6_results.json", "w") as f:
+        json.dump(results, f, indent=2)
+    _print_table6(results, k_values)
+    return results
+
+
+def _print_table6(results: dict, k_values: list[float]):
+    print("\n── Exp C 논문 충실 재현 (Table 6 형식) ─────────────────────────")
+    for model_name, by_k in results.items():
+        print(f"\n[{model_name}]")
+        for k in k_values:
+            rec = by_k[f"K={k}"]
+            o, a = rec["Ori"], rec["Aug"]
+            print(f"  K={k:<5} Ori min={o['min']:.1f} max={o['max']:.1f} avg={o['avg']:.1f}±{o['std']:.1f}"
+                  f"   Aug min={a['min']:.1f} max={a['max']:.1f} avg={a['avg']:.1f}±{a['std']:.1f}")
+    print("─────────────────────────────────────────────────────────────")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="resnet18", choices=["smpl", "resnet18"])
@@ -550,7 +693,12 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--el-ablation", action="store_true",
                         help="Run MSTAR El=17→30 ablation instead of SAMPLE experiment")
+    parser.add_argument("--paper-faithful", action="store_true",
+                        help="논문 충실 재현(mat_files 3단계 대비 + 4모델 + K=0/0.05/0.1) 실행")
     args = parser.parse_args()
+    if args.paper_faithful:
+        run_paper_faithful(epochs=args.epochs)
+        raise SystemExit(0)
     fn = run_el_ablation if args.el_ablation else run
     fn(
         model_name=args.model,
