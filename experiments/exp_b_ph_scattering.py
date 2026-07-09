@@ -1,44 +1,39 @@
 """
 Exp B — Phase History Interpolation Augmentation (논문 Section 2.1, Table 3)
 
-⚠️ 현재 구현은 논문과 불일치 — 재설계 대상. 정확한 설계는 docs/PAPER_SPEC.md 참조.
+⭐ 실제 학습 파이프라인은 로컬 MATLAB(Agarwal 희소복원)이 생성한 .mat 파일을
+augmentation/precomputed_aug.py(AugImagesDataset/BaselineDataset/TestImagesDataset)로
+로드해 notebooks/colab_template.ipynb Cell 7a에서 직접 학습한다.
+정확한 설계는 docs/PAPER_SPEC.md 참조.
 
-논문 Table 3 (원문): 5클래스(2S1,BMP2,BTR70,T72,ZSU23), train El17°/test El15°,
-  baseline = 클래스당 24~32장(총 136장, few-shot) → SMPL/AT 56.6%
-  PH 보간 증강(Aug1, 1088장) → 96.4%. 입력 64×64 crop. 손실 AT(ε=2)/LSM.
-  핵심: baseline이 낮은 이유는 부각 차이가 아니라 "학습 샘플이 136장뿐"이기 때문.
+이 파일은 그 파이프라인이 만든 체크포인트를 대상으로 하는 해석가능성 분석만 담당한다:
+  - run_gradcam_analysis(): 개선 #3 — Grad-CAM 히트맵 vs 산란점 IoU
+  - run_xai_analysis(): 개선 #3 확장 — Occlusion/SmoothGrad-IG 픽셀 XAI vs 산란점 IoU
+  - _collect_raw_files()/_depression_angle(): scripts/diag_mstar_format.py에서도 재사용
 
-현재 코드: 7개 Mixed Targets 클래스 전체(2049장) 학습 → 98% (few-shot 아님).
-  → 논문 재현하려면 5클래스 + 136장 baseline + azimuth 보간 + 64×64로 수정 필요.
-
-우리 팀 개선 #3 (Grad-CAM 산란점 일치도 검증): run_gradcam_analysis() 참고
+과거에는 이 파일 안에 자체 학습 루프(run(), PHAugmentedDataset)가 있었으나,
+azimuth 이웃 두 이미지를 PH 도메인에서 단순 선형평균하는 방식(산란점 미사용,
+논문 방법 아님, few-shot에서 65% 정체의 원인)이라 삭제했다. 실제 증강은
+MATLAB 희소복원(Eq.7 그룹 Lasso)이 담당한다.
 """
 from __future__ import annotations
 
 import argparse
-import random
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch.utils.data import Dataset
 
 from augmentation.ph_extraction import (
     amplitude_to_tensor,
     extract_scattering_centers,
     extract_spatial_scattering_centers,
-    interpolate_phase_history,
-    read_azimuth,
-    read_mstar_complex,
     read_mstar_header,
     read_mstar_raw,
     visualize_scattering,
 )
-from core.interfaces import EvalResult, SARDataset, SARSample, TrainConfig
-from core.mock_data import MockSARDataset
 from core.models import get_model
-from core.train import train_model
 from gradcam.cam import GradCAM
 from gradcam.scatter_overlap import centers_to_mask, iou as compute_iou
 from gradcam.attributions import occlusion_sensitivity, smoothgrad_ig
@@ -62,8 +57,6 @@ CLASS_ALIASES = {
     "T72":   ["T72", "t72"],
     "ZSU23": ["ZSU23", "ZSU_23_4", "zsu23", "ZSU_23"],
 }
-# few-shot baseline 샘플 수 (논문 Table 2, MSTAR-R): 총 136장
-FEWSHOT_COUNTS = {"2S1": 32, "BMP2": 24, "BTR70": 24, "T72": 24, "ZSU23": 32}
 EXP_B_INPUT = 64  # 논문: 64×64 center-crop (T2)
 
 
@@ -143,292 +136,8 @@ def _depression_angle(path: Path) -> str:
     return "unknown"
 
 
-def _stratified_split(
-    files_by_class: dict[str, list[Path]], seed: int, train_ratio: float = 0.8
-) -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
-    """클래스별 80/20 랜덤 분할. 각 클래스가 train/test 양쪽에 반드시 존재하도록 보장."""
-    train_files: dict[str, list[Path]] = {}
-    test_files: dict[str, list[Path]] = {}
-    rng = random.Random(seed)
-    for cls, files in files_by_class.items():
-        shuffled = files[:]
-        rng.shuffle(shuffled)
-        if len(shuffled) >= 2:
-            n_train = max(1, min(len(shuffled) - 1, int(len(shuffled) * train_ratio)))
-        else:
-            n_train = len(shuffled)  # 1개뿐이면 train에만
-        train_files[cls] = shuffled[:n_train]
-        test_files[cls] = shuffled[n_train:]
-    return train_files, test_files
-
-
-def _split_train_test(
-    files_by_class: dict[str, list[Path]], seed: int
-) -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
-    """논문 Table 3 프로토콜: cross-depression split (헤더 `DesiredDepression` 기반).
-
-    전역 상위 2개 부각을 train/test 부각으로 선택 (예: CD2 → 17°/30°).
-    클래스별로 두 부각 파일을 각각 train/test에 배치.
-    특정 클래스가 두 부각 중 하나만 가지면 → 그 클래스만 클래스 내 랜덤 80/20
-    (전체 폴백 대신 나머지 클래스의 cross-depression 이점 유지).
-    부각을 아예 못 읽으면 전체 stratified 80/20 폴백.
-    """
-    from collections import Counter
-
-    # 파일당 부각 1회만 읽어 캐시 (중복 디스크 I/O 방지)
-    dep_of: dict[Path, str] = {}
-    for files in files_by_class.values():
-        for p in files:
-            dep_of[p] = _depression_angle(p)
-
-    dep_counter: Counter = Counter(d for d in dep_of.values() if d != "unknown")
-
-    # 논문 SOC = train 17° / test 15°. 둘 다 존재하면 명시적으로 사용 (Table 2/3).
-    if dep_counter.get("17", 0) > 0 and dep_counter.get("15", 0) > 0:
-        train_dep, test_dep = "17", "15"
-    else:
-        top2 = [d for d, _ in dep_counter.most_common(2)]
-        if len(top2) < 2:
-            print("  ⚠️  헤더에서 2개 이상 부각을 못 찾음 — stratified 80/20 사용.")
-            return _stratified_split(files_by_class, seed)
-        train_dep, test_dep = top2[0], top2[1]
-    print(f"  Cross-depression split: train={train_dep}°, test={test_dep}°")
-
-    train_files: dict[str, list[Path]] = {}
-    test_files: dict[str, list[Path]] = {}
-    rng = random.Random(seed)
-
-    for cls, files in files_by_class.items():
-        tr = [p for p in files if dep_of[p] == train_dep]
-        te = [p for p in files if dep_of[p] == test_dep]
-        if tr and te:
-            train_files[cls] = tr
-            test_files[cls] = te
-        else:
-            # 이 클래스는 두 부각을 모두 갖지 않음 → 클래스 내 랜덤 80/20
-            print(f"    ⚠️  {cls}: {train_dep}°={len(tr)} {test_dep}°={len(te)} "
-                  f"— 클래스 내 랜덤 80/20 사용")
-            shuffled = files[:]
-            rng.shuffle(shuffled)
-            if len(shuffled) >= 2:
-                n_train = max(1, min(len(shuffled) - 1, int(len(shuffled) * 0.8)))
-            else:
-                n_train = len(shuffled)
-            train_files[cls] = shuffled[:n_train]
-            test_files[cls] = shuffled[n_train:]
-
-    return train_files, test_files
-
-
-class MSTARRawDataset(SARDataset):
-    """MSTAR raw binary 파일 → 이미지 Dataset. crop_size 지정 시 center-crop (논문 64×64)."""
-
-    def __init__(self, files_by_class: dict[str, list[Path]], class_names: list[str],
-                 crop_size: int | None = None):
-        self._class_names = class_names
-        self._crop = crop_size
-        self._samples: list[tuple[Path, int]] = []
-        for idx, cls in enumerate(class_names):
-            for p in files_by_class.get(cls, []):
-                self._samples.append((p, idx))
-
-    def __len__(self) -> int:
-        return len(self._samples)
-
-    def __getitem__(self, idx: int) -> SARSample:
-        path, label = self._samples[idx]
-        try:
-            amp = read_mstar_raw(path)
-        except Exception:
-            amp = np.zeros((128, 128), dtype=np.float32)
-        t = amplitude_to_tensor(amp, center_crop=self._crop)
-        return SARSample(image=t, label=label, meta={"source": str(path), "class_name": self._class_names[label]})
-
-    @property
-    def class_names(self) -> list[str]:
-        return self._class_names
-
-
-# ─── PH 보간 증강 데이터셋 ────────────────────────────────────────────────────
-
-class PHAugmentedDataset(SARDataset):
-    """
-    few-shot 원본 + PH 보간 합성 이미지 Dataset (논문 MSTAR-Aug).
-
-    논문 방식(T4): 각 원본 이미지를 **방위각(azimuth) 이웃**과 PH 도메인 보간해 합성.
-    실이미지 Az=θ+Δ에서 Az=θ 합성 → 방위각을 조밀하게 채움.
-    azimuth를 못 읽으면 파일 순서 이웃으로 폴백.
-
-    lazy loading: __init__에서 경로/메타 튜플만 저장, I/O는 __getitem__에서 수행.
-    """
-
-    def __init__(
-        self,
-        files_by_class: dict[str, list[Path]],
-        class_names: list[str],
-        n_alphas: int = 5,
-        seed: int = 0,
-        crop_size: int | None = None,
-    ):
-        self._class_names = class_names
-        self._crop = crop_size
-        # (kind, data, label) — kind: "original" | "synth"
-        self._samples: list[tuple[str, object, int]] = []
-
-        alphas = [i / (n_alphas + 1) for i in range(1, n_alphas + 1)]
-
-        for idx, cls in enumerate(class_names):
-            files = files_by_class.get(cls, [])
-            if not files:
-                continue
-
-            for p in files:
-                self._samples.append(("original", p, idx))
-
-            if len(files) >= 2:
-                # 방위각 기준 정렬 후 이웃 pairing (azimuth 이웃 보간)
-                az = {p: read_azimuth(p) for p in files}
-                if all(not np.isnan(v) for v in az.values()):
-                    ordered = sorted(files, key=lambda p: az[p])
-                else:
-                    ordered = files  # 폴백: 파일 순서
-                pairs = list(zip(ordered, ordered[1:] + ordered[:1]))
-                for p_a, p_b in pairs:
-                    for alpha in alphas:
-                        self._samples.append(("synth", (p_a, p_b, alpha), idx))
-
-    def __len__(self) -> int:
-        return len(self._samples)
-
-    def __getitem__(self, idx: int) -> SARSample:
-        kind, data, label = self._samples[idx]
-        if kind == "original":
-            try:
-                amp = read_mstar_raw(data)
-            except Exception:
-                amp = np.zeros((128, 128), dtype=np.float32)
-        else:
-            p_a, p_b, alpha = data
-            try:
-                amp = interpolate_phase_history(
-                    read_mstar_complex(p_a), read_mstar_complex(p_b), alpha
-                )
-            except Exception:
-                amp = np.zeros((128, 128), dtype=np.float32)
-        return SARSample(image=amplitude_to_tensor(amp, center_crop=self._crop), label=label,
-                         meta={"class_name": self._class_names[label]})
-
-    @property
-    def class_names(self) -> list[str]:
-        return self._class_names
-
-
-# ─── Main runners ─────────────────────────────────────────────────────────────
-
 def _data_available() -> bool:
     return any(d.exists() and any(d.rglob("*")) for d in MSTAR_RAW_DIRS)
-
-
-def _fewshot_subsample(
-    train_files: dict[str, list[Path]], counts: dict[str, int], seed: int
-) -> dict[str, list[Path]]:
-    """논문 MSTAR-R: 클래스별로 counts만큼만 무작위 선택 (few-shot baseline, 총 136장)."""
-    rng = random.Random(seed)
-    out: dict[str, list[Path]] = {}
-    for cls, files in train_files.items():
-        shuffled = files[:]
-        rng.shuffle(shuffled)
-        out[cls] = shuffled[: counts.get(cls, len(shuffled))]
-    return out
-
-
-def run(
-    model_name: str = "smpl",
-    epochs: int = 60,
-    n_interp: int = 5,
-    seed: int = 0,
-    save_dir: Path = RESULTS_DIR,
-    use_mock: bool = False,
-    loss_type: str = "at",          # 논문 headline: AT(ε=2). "lsm"도 가능
-    few_shot: bool = True,          # 논문 Table 3: few-shot(136장) baseline
-    input_size: int = EXP_B_INPUT,  # 논문: 64×64 center-crop
-) -> dict:
-    """
-    논문 Table 3 재현: few-shot 원본(MSTAR-R) vs PH 보간 증강(MSTAR-Aug) 정확도 비교.
-    - few_shot=True: baseline을 클래스당 24~32장(총 136장)으로 제한 (논문 핵심)
-    - loss_type: 'at'(ε=2, headline 56.6→96.4) 또는 'lsm'(61.3→97.6)
-    - input_size: 64 center-crop
-    """
-    save_dir.mkdir(parents=True, exist_ok=True)
-    num_classes = len(CLASSES)
-
-    if use_mock or not _data_available():
-        if not use_mock:
-            print(f"[Exp B] MSTAR raw not found at {MSTAR_RAW_DIRS} — using mock data.")
-        n = 30 * num_classes if few_shot else 60 * num_classes
-        base_ds = MockSARDataset(n=n, num_classes=num_classes, seed=seed)
-        aug_ds  = MockSARDataset(n=n * (n_interp + 1), num_classes=num_classes, seed=seed + 1)
-        test_ds = MockSARDataset(n=20 * num_classes, num_classes=num_classes, seed=seed + 2)
-    else:
-        print(f"[Exp B] Loading MSTAR raw (Targets+Mixed) for 5 classes {CLASSES} ...")
-        files_by_class = _collect_raw_files(MSTAR_RAW_DIRS, CLASSES)
-        for cls, files in files_by_class.items():
-            print(f"  {cls}: {len(files)} files")
-
-        # train El17° / test El15° (헤더 부각 기반)
-        train_files, test_files = _split_train_test(files_by_class, seed)
-
-        # 논문 MSTAR-R: few-shot 제한 (클래스당 24~32장)
-        if few_shot:
-            train_files = _fewshot_subsample(train_files, FEWSHOT_COUNTS, seed)
-        n_train_total = sum(len(v) for v in train_files.values())
-        n_test_total = sum(len(v) for v in test_files.values())
-        print(f"  → train {n_train_total}개 (few_shot={few_shot}) / test {n_test_total}개, "
-              f"입력 {input_size}×{input_size}, loss={loss_type}")
-        for cls in CLASSES:
-            print(f"     {cls}: train={len(train_files[cls])} test={len(test_files[cls])}")
-
-        base_ds = MSTARRawDataset(train_files, CLASSES, crop_size=input_size)
-        aug_ds  = PHAugmentedDataset(train_files, CLASSES, n_alphas=n_interp,
-                                     seed=seed, crop_size=input_size)
-        test_ds = MSTARRawDataset(test_files, CLASSES, crop_size=input_size)
-
-    results = {"loss_type": loss_type, "few_shot": few_shot}
-
-    cfg = TrainConfig(model_name=model_name, num_classes=num_classes, epochs=epochs,
-                      seed=seed, loss_type=loss_type)
-
-    # Condition 1: MSTAR-R (few-shot 원본만)
-    print("\n── Condition 1: few-shot 원본만 학습 (MSTAR-R) ────────────────────")
-    model1 = get_model(model_name, num_classes)
-    model1, r1 = train_model(model1, base_ds, test_ds, cfg)
-    results["no_aug_acc"] = r1.accuracy
-    print(f"  → 테스트 정확도: {r1.accuracy * 100:.1f}%")
-
-    # Condition 2: MSTAR-Aug (PH 보간 증강)
-    print("\n── Condition 2: PH 보간 증강 학습 (MSTAR-Aug) ─────────────────────")
-    model2 = get_model(model_name, num_classes)
-    model2, r2 = train_model(model2, aug_ds, test_ds, cfg)
-    results["ph_aug_acc"] = r2.accuracy
-    print(f"  → 테스트 정확도: {r2.accuracy * 100:.1f}%")
-
-    ref_base = "56.6" if loss_type == "at" else "61.3"
-    ref_aug = "96.4" if loss_type == "at" else "97.6"
-    print("\n── Exp B 결과 (Table 3 재현, SMPL/%s) ──────────────────────────" % loss_type.upper())
-    print(f"  MSTAR-R(few-shot): {results['no_aug_acc'] * 100:.1f}%  (논문 SMPL: {ref_base}%)")
-    print(f"  MSTAR-Aug(PH증강): {results['ph_aug_acc'] * 100:.1f}%  (논문 SMPL: {ref_aug}%)")
-
-    import json
-    with open(save_dir / "metrics.json", "w") as f:
-        json.dump(results, f, indent=2)
-
-    # Grad-CAM 분석(개선 #3)에서 재사용할 학습된 모델 저장
-    if not use_mock:
-        torch.save(model2.state_dict(), save_dir / f"{model_name}_ph_aug.pth")
-        torch.save(model1.state_dict(), save_dir / f"{model_name}_no_aug.pth")
-        print(f"  체크포인트 저장: {save_dir / f'{model_name}_ph_aug.pth'}")
-
-    return results
 
 
 def run_gradcam_analysis(
@@ -673,28 +382,16 @@ def run_xai_analysis(
 
 
 if __name__ == "__main__":
+    # 학습은 notebooks/colab_template.ipynb Cell 7a(MATLAB .mat + precomputed_aug.py)에서 수행.
+    # 이 CLI는 학습된 체크포인트에 대한 해석가능성 분석만 제공한다.
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="smpl", choices=["smpl", "resnet18"])
-    parser.add_argument("--epochs", type=int, default=60)
-    parser.add_argument("--n-interp", type=int, default=5)
-    parser.add_argument("--mock", action="store_true")
-    parser.add_argument("--gradcam", action="store_true", help="Grad-CAM 분석 실행")
     parser.add_argument("--checkpoint", type=Path, default=None)
-    parser.add_argument("--loss", default="at", choices=["at", "lsm"], help="논문: at(56.6→96.4) / lsm(61.3→97.6)")
-    parser.add_argument("--full-data", action="store_true", help="few-shot 해제(전체 데이터, 논문 아님)")
+    parser.add_argument("--xai", action="store_true",
+                        help="Occlusion/SmoothGrad-IG 픽셀 XAI 실행 (기본은 Grad-CAM)")
     args = parser.parse_args()
 
-    if args.gradcam:
-        run_gradcam_analysis(
-            model_name=args.model,
-            checkpoint=args.checkpoint,
-        )
+    if args.xai:
+        run_xai_analysis(model_name=args.model, checkpoint=args.checkpoint)
     else:
-        run(
-            model_name=args.model,
-            epochs=args.epochs,
-            n_interp=args.n_interp,
-            use_mock=args.mock,
-            loss_type=args.loss,
-            few_shot=not args.full_data,
-        )
+        run_gradcam_analysis(model_name=args.model, checkpoint=args.checkpoint)

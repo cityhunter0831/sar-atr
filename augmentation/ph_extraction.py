@@ -130,48 +130,6 @@ def read_mstar_complex(path: str | Path) -> np.ndarray:
     return (amplitude * np.exp(1j * phase)).reshape(n_rows, n_cols)
 
 
-def interpolate_phase_history(
-    img_a: np.ndarray,
-    img_b: np.ndarray,
-    alpha: float = 0.5,
-    apply_window: bool = True,
-) -> np.ndarray:
-    """
-    논문 Section 2.1: 두 SAR 이미지의 Phase History 도메인 사이를 보간.
-
-    SENSE-Lab-OSU/mstar_data_aug MATLAB 구현 참조:
-    - fftshift/ifftshift로 DC 중앙 정렬
-    - Taylor 윈도우로 스펙트럼 leakage 억제
-
-    Args:
-        img_a: complex HxW array (elevation angle α)
-        img_b: complex HxW array (elevation angle β), same shape as img_a
-        alpha: interpolation weight — 0.0 → pure A, 1.0 → pure B
-        apply_window: Taylor 윈도우 적용 여부 (MATLAB 참조 구현과 일치)
-
-    Returns:
-        Amplitude image float32 [H, W] of the interpolated SAR image.
-    """
-    if apply_window:
-        from scipy.signal.windows import taylor
-        h, w = img_a.shape
-        win_h = taylor(h, nbar=4, sll=35, norm=False).astype(np.float32)
-        win_w = taylor(w, nbar=4, sll=35, norm=False).astype(np.float32)
-        window_2d = np.outer(win_h, win_w)
-        img_a = img_a * window_2d
-        img_b = img_b * window_2d
-
-    # MATLAB: fftshift(fft2(ifftshift(img))) → phase history domain
-    ph_a = np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(img_a)))
-    ph_b = np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(img_b)))
-
-    # Linear interpolation in PH domain
-    ph_interp = (1.0 - alpha) * ph_a + alpha * ph_b
-
-    # MATLAB: ifftshift(ifft2(fftshift(ph))) → back to image domain
-    img_interp = np.fft.fft2(np.fft.ifftshift(ph_interp))
-    return np.abs(img_interp).astype(np.float32)
-
 
 def amplitude_to_tensor(
     amp: np.ndarray, target_size: int = 128, center_crop: int | None = None
