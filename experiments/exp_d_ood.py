@@ -43,11 +43,14 @@ from experiments.exp_c_contrast_optuna import SampleDataset, SAMPLE_ROOT, SAMPLE
 ALL_CLASSES = SAMPLE_CLASSES
 
 # Holdout combinations: J개 SAMPLE 클래스를 학습에서 제외 (near-OOD).
-# 논문 Figure 11: M35(#5)+M548(#6) 동시 제외 시 탐지 쉬움 → 대표 조합 선택.
+# 논문 Section 4.4.2 HLD1/2/3 (원문 페이지 이미지로 확정, Figure 11 본문
+# "#5 (M35) and #6 (M548)... the only two trucks in the SAMPLE dataset"와
+# Figure 10 캡션 "#0-9=2S1,BMP2,BTR70,M1,M2,M35,M548,M60,T72,ZSU23" 교차검증):
+#   HLD1={#3:M1}, HLD2={#5:M35,#6:M548}, HLD3={#3:M1,#5:M35,#6:M548}
 HOLDOUT_CONFIGS: dict[int, list[str]] = {
-    1: ["m548"],
+    1: ["m1"],
     2: ["m35", "m548"],
-    3: ["m35", "m548", "t72"],
+    3: ["m1", "m35", "m548"],
 }
 
 

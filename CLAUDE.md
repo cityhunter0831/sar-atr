@@ -57,14 +57,17 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 ### 🔧 트러블슈팅 (논문과 어긋남 = 수정 대상)
 | # | 실험 | 문제 → 논문 정답 | 상태 |
 |---|---|---|---|
-| T1 | Exp B | 7클래스 전체(2049장) → 5클래스 **few-shot 136장** (56.6%) | ✅ 코드 반영 (`few_shot=True`, 5클래스, `FEWSHOT_COUNTS`) |
-| T2 | Exp B | 128 resize → **64×64 center-crop** | ✅ `amplitude_to_tensor(center_crop=64)` |
-| T3 | Exp B | CE → **AT(ε=2)/LSM** | ✅ `run(loss_type='at'/'lsm')` |
-| T4 | Exp B | 인접파일 보간 → **azimuth 이웃 PH 보간** | ✅ `read_azimuth` 정렬 pairing |
+| T1 | Exp B | 7클래스 전체(2049장) → 5클래스 **few-shot 136장** (56.6%) | ✅ MATLAB `.mat` 하이브리드 파이프라인(`augmentation/precomputed_aug.py`, 노트북 Cell 7a)으로 대체 완료. 구식 `run()`/`PHAugmentedDataset`(few_shot/FEWSHOT_COUNTS 등)는 삭제됨 — 아래 "Exp B 학습 파이프라인" 참조. |
+| T2 | Exp B | 128 resize → **64×64 center-crop** | ✅ `amplitude_to_tensor(center_crop=64)` (precomputed_aug 파이프라인에서도 유지) |
+| T3 | Exp B | CE → **AT(ε=2)/LSM** | ✅ 노트북 Cell 7a `TrainConfig(loss_type='at')` |
+| T4 | Exp B | 인접파일 보간 → **azimuth 이웃 PH 보간** | ✅ MATLAB 희소복원(Eq.7)로 대체 — 파일 순서 보간이 아니라 산란점 기반 물리적 재합성 |
 | T5 | Exp A | TrainCTx2 붕괴(39%) → 회복(**96.0%**) | ✅ 3563장 정상 로드 확인. SMPL **98.8±0.3%** / RN18 **99.9±0.1%** (논문 96.0/98.4% 초과 달성) |
-| T6 | Exp D | ID=MSTAR → **ID=SAMPLE 10클래스**, SAR-ship=far-OOD | ✅ `SampleDataset` 기반 재설계 |
-| T7 | Exp C | 목표 불명확 → K=0 **RN18 94.5%** 명시 | ✅ `_print_figure1` 수정 |
-| T8 | Exp B | σ_G 라인서치 제거 필요성 → **σ_G=1.0 고정 확정** | ✅ 2S1 대표이미지 잔차 차이 0.002% 정량 검증. 재복원 불필요. |
+| T6 | Exp D | ID=MSTAR → **ID=SAMPLE 10클래스** | ✅ `SampleDataset` 기반 재설계 |
+| T6b | Exp D | Figure 9는 SAR-ship이 아니라 **Holdout/MSTAR-O/MSTAR-P** 3종 OOD 테스트를 비교(원문 p.17 이미지 확인). SAR-ship+MiniSAR은 **OE 학습 재료**일 뿐 Figure 9의 OOD 테스트셋이 아님 | 🔶 진행 중 — 지금은 SAR-ship을 "우리가 추가한 보조 far-OOD"로만 씀(코드 변경 없음, 서술만 정정). MSTAR-O(BRDM2/BTR60/D7/T62/ZIL131, 우리가 이미 가진 Mixed Targets raw로 구성 가능) 구현 필요. MSTAR-P는 논문이 정확한 출처를 안 밝혀 100% 동일 소스 특정 불가(웹서치로 유사 공개 자료는 확인) — 우선순위 낮음. |
+| T6c | Exp D | `HOLDOUT_CONFIGS`가 논문 HLD1/2/3과 다름(J=1이 m548이 아니라 M1이어야 함 등) — 원문 p.18 Figure 11 + p.19 Section 4.4.2 이미지 대조로 확정 | ✅ `{1:["m1"], 2:["m35","m548"], 3:["m1","m35","m548"]}`로 정정 완료 |
+| T6d | Exp D | ID 학습이 K=0(100% synthetic)로 도는데 논문 Figure 9/10/11 헤드라인은 **K=0.1**(10% 실측 혼합) — Figure 13에서 K=0가 "최악 조건"으로 명시됨 | 🔶 미구현 — 지금까지 관찰된 낮은 ID 정확도(21~29%)의 유력 원인 |
+| T7 | Exp C | 목표 불명확 → K=0 **RN18 94.5%** 명시 | ✅ `_print_figure1` 수정. (참고: 논문 Table 6은 K=0/0.05/0.1 3단계+4모델, 우리는 K=0·RN18만 — 확장 필요) |
+| T8 | Exp B | σ_G 라인서치 제거 필요성 → **σ_G=1.0 고정 확정** | ✅ 2S1 대표이미지 잔차 차이 0.002% 정량 검증. 재복원 불필요. (σ_G 자체는 이 논문이 아니라 Agarwal 원 논문 소관 — 원문 재확인 완료) |
 | ✅ | 공통 | ~~BUG-X1~X4 (Taylor 부호/오프셋/포맷)~~ | 완료 |
 
 > **T1~T8, BUG-X1~X4 모두 완료.** Exp A 수치 Colab 실행으로 검증 완료 (SMPL 98.8%, RN18 99.9%).

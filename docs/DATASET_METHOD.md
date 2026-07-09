@@ -90,21 +90,22 @@
   - ID = **SAMPLE 10클래스**(#0~9), K=0.1
   - OE 학습 = **SAR-ship 2048 + MiniSAR 443**
   - OOD 테스트 = Holdout(J개 클래스 제외) + MSTAR-O + MSTAR-P (5클래스: BRDM2,BTR60,D7,T62,ZIL131)
-- **우리(현재)**: 🔴 ID=MSTAR / 🟡 OE·OOD=SAR-ship만
+- **우리(현재, 2026-07 재검토 반영)**: 🟢 ID=SAMPLE(수정 완료) / 🟢 Holdout 클래스(HLD1/2/3) 정정 완료 / 🔴 K=0.1 미적용(K=0으로 학습 중) / 🔴 MSTAR-O/P 미구현, 대신 SAR-ship을 보조 far-OOD로 사용 중
 - **의도적 대체(정당)**: **MiniSAR는 논문 저자 자체 개발 비공개 데이터** → 공개된 SAR-ship로 OE 대체. OOD/OE에 cross-domain SAR을 쓰는 것은 문헌 표준(원 논문도 SAR-ship 병용)이라 정당.
-- **수정 필요(어긋남)**: ID는 **SAMPLE이어야** 함(현재 MSTAR). SAR-ship은 **OE 학습용**이지 OOD 테스트가 아님.
+- **수정 필요(어긋남)**: SAR-ship은 **OE 학습용**이지 논문 Figure 9의 OOD 테스트셋이 아님(Figure 9는 Holdout/MSTAR-O/MSTAR-P 3종만 비교) — 지금은 SAR-ship을 "우리가 추가한 보조 far-OOD"로 명확히 구분해 서술. ID 학습에 K=0.1(실측 10% 혼합)과 대비 증강(Section 3)도 아직 미적용.
 
 ### 구현 방법 (논문 재현 목표)
-1. ID = SAMPLE 10클래스로 분류기 학습 (`get_features()` 특징 추출)
+1. ID = SAMPLE 10클래스로 분류기 학습, **K=0.1**(synth 90%+real 10% 혼합) + 대비 증강 적용 (`get_features()` 특징 추출) — K=0.1/대비 증강은 아직 미구현
 2. OE = SAR-ship을 adversarial outlier exposure 학습 재료로
-3. OOD 테스트: Holdout(SAMPLE 일부 클래스 제외) + (가능하면 MSTAR-O/P)
-4. 탐지기: **ODIN**(T=1000) vs **Mahalanobis**(AdvOE), AUROC·TNR@95TPR
+3. OOD 테스트: Holdout(SAMPLE 일부 클래스 제외, HLD1/2/3 정정 완료) + MSTAR-O(구현 필요, 데이터는 이미 보유) + MSTAR-P(우선순위 낮음, 정확한 소스 특정 불가)
+4. 탐지기: **ODIN**(T=1000) vs **Mahalanobis**(AdvOE), AUROC·TNR@95TPR — AdvOE의 adversarial 학습 목적함수(Eq.4) 자체는 미구현, 현재는 일반 학습 후 사후 스코어링만
 
 ### 실험 설계
 | OOD 종류 | 성격 | 기대 |
 |---|---|---|
-| Holdout (J=1,2,3) | 같은 SAMPLE 내 미지 클래스 (near-OOD) | 어려움 |
-| MSTAR-O/P | cross-dataset (far-OOD) | 쉬움, Maha 우세 |
+| Holdout (J=1,2,3 = {M1} / {M35,M548} / {M1,M35,M548}) | 같은 SAMPLE 내 미지 클래스 (near-OOD) | 어려움 |
+| MSTAR-O/P | cross-dataset (far-OOD), 논문 Figure 9의 실제 비교 대상 | 쉬움, Maha 우세 |
+| SAR-ship (우리 추가, 논문엔 없음) | cross-domain 보조 검증 | 참고용 |
 
 ### 우리 방법론 확장 (Exp D)
 - **ODIN vs Mahalanobis 비교** — 논문 정성 결론(Maha 우세)을 정량 재현. (팀 개선 3종은 A=SSIM / C=대비 자동조절 / B=XAI에 배치, Exp D 자체엔 별도 개선 없음)
@@ -118,4 +119,4 @@
 | A | MSTAR 5cls + clutter | gengzhe2015 PNG | 🟢 | 논문 저자 공식 업로드본 |
 | B | MSTAR raw 5cls (Targets+Mixed) | Mixed 7cls (현재) | 🔴 | 수정: 5cls few-shot |
 | C | SAMPLE 10cls | SAMPLE 10cls | 🟢 | 논문 주 실험과 동일 |
-| D | SAMPLE(ID)+SAR-ship/MiniSAR(OE)+MSTAR-O/P(OOD) | MSTAR(ID)+SAR-ship | 🔴🟡 | MiniSAR 비공개→SAR-ship (정당); ID는 SAMPLE로 수정 |
+| D | SAMPLE(ID, K=0.1)+SAR-ship/MiniSAR(OE)+Holdout/MSTAR-O/P(OOD) | SAMPLE(ID, K=0)+SAR-ship(보조 far-OOD) | 🟡🔴 | MiniSAR 비공개→SAR-ship (정당); ID/Holdout은 수정 완료, K=0.1·MSTAR-O·대비증강 미구현 |
