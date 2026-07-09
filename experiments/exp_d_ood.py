@@ -15,7 +15,10 @@ Comparison:
 Expected structure:
     data/sample/png_images/decibel/{real,synth}/<class>/   (SAMPLE, exp_c와 공유)
     data/sarship/                              (SAR-ship images, OE 학습 재료)
-    results/exp_a/<model>_seed0_j<j>.pth       (Exp D 자체 체크포인트 — exp_a와 폴더만 공유)
+    results/exp_a/<model>_seed0_j<j>_k<k>.pth  (Exp D 자체 체크포인트 — exp_a와 폴더만 공유.
+                                                 파일명에 k를 반영해 K값을 바꾸면 자동 재학습됨 —
+                                                 이전엔 k가 없어 K=0→K=0.1로 바꿔도 옛 체크포인트를
+                                                 그대로 재사용하는 버그가 있었음, 수정 완료)
 """
 from __future__ import annotations
 
@@ -51,7 +54,8 @@ ALL_CLASSES = SAMPLE_CLASSES
 # amplitude만 뽑으면 재현 가능(논문: "self-generated with Matlab based on the official
 # MSTAR raw data" — 우리는 단순 진폭 렌더링만 하므로 완전히 동일하진 않을 수 있음).
 from experiments.exp_b_ph_scattering import _collect_raw_files, MSTAR_RAW_DIRS  # noqa: E402
-from augmentation.ph_extraction import read_mstar_raw, amplitude_to_tensor  # noqa: E402
+from augmentation.ph_extraction import read_mstar_raw  # noqa: E402
+from augmentation.sample_mat import _normalize_amplitude, DYN_RANGE_PRESETS_DB  # noqa: E402
 
 MSTAR_O_CLASSES = ["BRDM2", "BTR60", "D7", "T62", "ZIL131"]
 MSTAR_O_ALIASES = {
@@ -169,10 +173,20 @@ class SARShipDataset(SARDataset):
 
 class MSTARODataset(SARDataset):
     """MSTAR-O — 논문 Figure 9의 far-OOD 테스트셋. BRDM2/BTR60/D7/T62/ZIL131
-    5클래스를 Mixed Targets CD1/CD2 공식 raw에서 수집(MATLAB 없이 amplitude만 렌더링)."""
+    5클래스를 Mixed Targets CD1/CD2 공식 raw에서 수집(MATLAB 없이 amplitude만 렌더링).
 
-    def __init__(self, files_by_class: dict[str, list[Path]], class_names: list[str]):
+    버그 B 조사: ODIN이 far-OOD(mstar_o/sarship)에서 예외 없이 AUROC=0.000(완전
+    역전)을 내던 원인 — ID 학습은 SAMPLE을 log-dB 압축 정규화(`_normalize_amplitude`,
+    소수 밝은 산란점에 값이 몰리는 걸 막아 도메인 갭을 줄이는 용도, 그 자체 docstring이
+    "선형 진폭은 도메인 갭이 크다"고 명시)로 하는데, 이 클래스는 `amplitude_to_tensor()`로
+    **선형** 정규화를 쓰고 있었다 — ID와 다른 정규화 스킴이 ODIN에 그대로 새로운(그리고
+    일관된 방향의) 도메인 갭을 얹어 모든 sample에서 far-OOD가 ID보다 항상 더 "자신있게"
+    분류되는 결과를 냈을 가능성이 높다. SAMPLE ID와 동일한 log-dB 정규화로 통일."""
+
+    def __init__(self, files_by_class: dict[str, list[Path]], class_names: list[str],
+                 target_size: int = 128):
         self._class_names = class_names
+        self._target_size = target_size
         self._samples: list[tuple[Path, int]] = []
         for idx, cls in enumerate(class_names):
             for p in files_by_class.get(cls, []):
@@ -182,12 +196,20 @@ class MSTARODataset(SARDataset):
         return len(self._samples)
 
     def __getitem__(self, idx: int) -> SARSample:
+        import torch.nn.functional as _F
         path, label = self._samples[idx]
         try:
-            amp = read_mstar_raw(path)
+            amp = read_mstar_raw(path).astype(np.float32)
         except Exception:
-            amp = np.zeros((128, 128), dtype=np.float32)
-        t = amplitude_to_tensor(amp)  # 128×128, Exp D 다른 데이터셋과 동일 해상도
+            amp = np.zeros((self._target_size, self._target_size), dtype=np.float32)
+        # ID(SAMPLE) 학습과 동일한 "original" 프리셋 log-dB 정규화 사용
+        norm = _normalize_amplitude(amp[None, ...], log_scale=True,
+                                    dyn_range_db=DYN_RANGE_PRESETS_DB["original"])[0]
+        t = torch.from_numpy(norm).unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
+        if norm.shape[0] != self._target_size or norm.shape[1] != self._target_size:
+            t = _F.interpolate(t, size=(self._target_size, self._target_size),
+                               mode="bilinear", align_corners=False)
+        t = t.squeeze(0)  # [1,H,W]
         return SARSample(image=t, label=label,
                          meta={"class_name": self._class_names[label], "source": str(path)})
 
@@ -360,7 +382,12 @@ def run(
         train_ds, test_id_ds, holdout_ds, oe_ds = load_id_holdout(j, k=k, seed=seed)
 
         # Load or train model
-        ckpt = checkpoint_dir / f"{model_name}_seed{seed}_j{j}.pth"
+        # 버그 A 수정: 체크포인트 파일명에 k를 반영하지 않으면, 데이터 구성(K=0→K=0.1
+        # 등)을 바꿔도 아키텍처가 같다는 이유로 옛 체크포인트를 그대로 재사용해버려
+        # "재학습됐다고 착각한 무효 결과"가 나온다 (Colab 1차 실행에서 실제로 발생).
+        # k값을 파일명에 포함시켜 설정이 바뀌면 자동으로 새 체크포인트 경로가 되게 한다.
+        k_tag = f"k{k:.2f}".rstrip("0").rstrip(".")
+        ckpt = checkpoint_dir / f"{model_name}_seed{seed}_j{j}_{k_tag}.pth"
         model = get_model(model_name, num_classes=len(known))
 
         loaded = False
