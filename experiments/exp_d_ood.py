@@ -169,11 +169,13 @@ def _data_available() -> bool:
 
 def load_id_holdout(
     j: int = 1, class_names: list[str] = ALL_CLASSES
-) -> tuple[SARDataset, SARDataset, SARDataset, SARDataset]:
+) -> tuple[SARDataset, SARDataset, SARDataset, "SARDataset | None"]:
     """
     T6 재설계: ID = SAMPLE 10클래스. Holdout = J개 SAMPLE 클래스(near-OOD),
     OE(=OOD 교차도메인) = SAR-ship.
-    Returns (train_ds, test_id_ds, test_holdout_ds, oe_ds). 실데이터 없으면 mock.
+    Returns (train_ds, test_id_ds, test_holdout_ds, oe_ds).
+    SAMPLE 데이터 자체가 없으면 4개 모두 mock. SAR-ship만 없으면 oe_ds=None
+    (mock으로 대체하지 않음 — 의미 없는 far-OOD 숫자가 결과에 섞이는 것을 방지).
     """
     holdout = HOLDOUT_CONFIGS[j]
     known = [c for c in class_names if c not in holdout]
@@ -195,8 +197,9 @@ def load_id_holdout(
 
     sar_ship = SARShipDataset(SARSHIP_DIR)
     if len(sar_ship) == 0:
-        print("[Exp D] SAR-ship not found — using mock OE data.")
-        oe_ds: SARDataset = MockSARDataset(n=100, num_classes=1, seed=99)
+        print(f"[Exp D] SAR-ship not found at {SARSHIP_DIR} — far-OOD(sarship) 비교를 건너뜁니다.\n"
+              "  (mock 데이터로 대체하면 진짜 결과처럼 보이는 의미 없는 숫자가 나오므로 skip)")
+        oe_ds: SARDataset | None = None
     else:
         oe_ds = sar_ship  # far-OOD (cross-domain). 논문에선 OE 학습 재료로도 사용
 
@@ -210,14 +213,27 @@ def run_ood_experiment(
     train_ds: SARDataset,
     test_id_ds: SARDataset,
     holdout_ds: SARDataset,
-    oe_ds: SARDataset,
+    oe_ds: "SARDataset | None",
     j: int,
 ) -> dict:
-    """Run both ODIN and Mahalanobis on holdout + SAR-ship OOD."""
+    """Run both ODIN and Mahalanobis on holdout + SAR-ship OOD.
+
+    oe_ds=None (SAR-ship 데이터 없음) 이면 sarship 비교는 건너뛰고 None으로 남긴다 —
+    mock으로 대체해 의미 없는 숫자를 결과에 섞지 않기 위함.
+    """
     model.eval()
     results = {"j": j}
 
-    for ood_name, ood_ds in [("holdout", holdout_ds), ("sarship", oe_ds)]:
+    ood_targets = [("holdout", holdout_ds)]
+    if oe_ds is not None:
+        ood_targets.append(("sarship", oe_ds))
+    else:
+        print("  [SKIP] sarship — SAR-ship 데이터 없음 (data/sarship 확인 필요)")
+        for method in ["odin", "mahalanobis"]:
+            results[f"{method}_sarship_auroc"] = None
+            results[f"{method}_sarship_tnr95"] = None
+
+    for ood_name, ood_ds in ood_targets:
         for method in ["odin", "mahalanobis"]:
             print(f"  [{method.upper()}] ID vs OOD={ood_name} ...", end=" ", flush=True)
             try:
