@@ -36,9 +36,11 @@ RESULTS_DIR = Path("results/exp_d")
 SARSHIP_DIR = Path("data/sarship")
 
 # T6 재설계: 논문은 ID=SAMPLE 10클래스, OE=SAR-ship(+MiniSAR 비공개), OOD=Holdout+MSTAR-O/P.
-# SAMPLE 클래스 #0~#9 (논문 순서). exp_c의 SampleDataset 재사용.
-from experiments.exp_c_contrast_optuna import SampleDataset, SAMPLE_ROOT  # noqa: E402
-ALL_CLASSES = ["2s1", "bmp2", "btr70", "m1", "m2", "m35", "m548", "m60", "t72", "zsu23"]
+# SAMPLE 클래스 #0~#9 (논문 Figure 10 순서). exp_c의 SampleDataset·클래스 리스트를 그대로 재사용
+# — 리스트를 이 파일에 따로 하드코딩하면 두 파일이 드리프트할 수 있어(과거에 실제로 순서가 어긋난 적 있음)
+# 단일 소스(exp_c.SAMPLE_CLASSES)를 공유한다.
+from experiments.exp_c_contrast_optuna import SampleDataset, SAMPLE_ROOT, SAMPLE_CLASSES  # noqa: E402
+ALL_CLASSES = SAMPLE_CLASSES
 
 # Holdout combinations: J개 SAMPLE 클래스를 학습에서 제외 (near-OOD).
 # 논문 Figure 11: M35(#5)+M548(#6) 동시 제외 시 탐지 쉬움 → 대표 조합 선택.

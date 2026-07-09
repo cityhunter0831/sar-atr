@@ -36,7 +36,9 @@ DATA_ROOT = Path("data/mstar/MSTAR_PUBLIC_MIXED_TARGETS_CD2")
 SAMPLE_ROOT = Path("data/sample/png_images/decibel")
 FIGURE1_CLASSES = ["2S1", "BRDM_2", "ZSU_23_4"]  # 실제 폴더명 (언더스코어)
 # SAMPLE dataset 클래스 (BMP2, BTR70, T72 등 MSTAR와 동일)
-SAMPLE_CLASSES = ["2s1", "bmp2", "btr70", "m1", "m2", "m35", "m60", "m548", "t72", "zsu23"]
+# 논문 Figure 10 캡션 순서와 동일(#0~#9 = 2S1,BMP2,BTR70,M1,M2,M35,M548,M60,T72,ZSU23).
+# exp_d_ood.py의 ALL_CLASSES와도 반드시 이 순서로 일치시킬 것.
+SAMPLE_CLASSES = ["2s1", "bmp2", "btr70", "m1", "m2", "m35", "m548", "m60", "t72", "zsu23"]
 
 
 # ─── Dataset helpers ──────────────────────────────────────────────────────────
