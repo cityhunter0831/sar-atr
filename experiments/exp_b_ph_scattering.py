@@ -164,18 +164,23 @@ def run_gradcam_analysis(
     num_classes = len(CLASSES)
     model = get_model(model_name, num_classes)
 
-    # checkpoint 미지정 시 run()이 저장한 PH 보간 모델을 기본 사용
+    # checkpoint 미지정 시 노트북 Cell 7a가 저장한 PH 보간 모델을 기본 사용
     if checkpoint is None:
         default_ckpt = RESULTS_DIR / f"{model_name}_ph_aug.pth"
         if default_ckpt.exists():
             checkpoint = default_ckpt
 
     if checkpoint is not None and checkpoint.exists():
-        model.load_state_dict(torch.load(checkpoint, map_location="cpu"))
-        print(f"Loaded checkpoint: {checkpoint}")
+        try:
+            model.load_state_dict(torch.load(checkpoint, map_location="cpu"))
+            print(f"Loaded checkpoint: {checkpoint}")
+        except RuntimeError as e:
+            print(f"⚠️  체크포인트 구조 불일치({checkpoint}): {e}\n"
+                  "    랜덤 가중치 모델 사용 (결과 무의미). Cell 7a를 다시 실행해 재학습하세요.")
+            model = get_model(model_name, num_classes)  # 부분 로드된 가중치 폐기
     else:
         print("⚠️  학습된 체크포인트 없음 — 랜덤 가중치 모델 사용 (결과 무의미). "
-              "먼저 run()을 실행해 모델을 저장하세요.")
+              "먼저 notebooks/colab_template.ipynb Cell 7a를 실행해 모델을 저장하세요.")
     model.eval()
 
     raw_files: list[Path] = []
@@ -294,10 +299,16 @@ def run_xai_analysis(
         if default_ckpt.exists():
             checkpoint = default_ckpt
     if checkpoint is not None and checkpoint.exists():
-        model.load_state_dict(_torch.load(checkpoint, map_location="cpu"))
-        print(f"Loaded checkpoint: {checkpoint}")
+        try:
+            model.load_state_dict(_torch.load(checkpoint, map_location="cpu"))
+            print(f"Loaded checkpoint: {checkpoint}")
+        except RuntimeError as e:
+            print(f"⚠️  체크포인트 구조 불일치({checkpoint}): {e}\n"
+                  "    랜덤 가중치 모델 사용 (결과 무의미). Cell 7a를 다시 실행해 재학습하세요.")
+            model = get_model(model_name, num_classes)  # 부분 로드된 가중치 폐기
     else:
-        print("⚠️  학습된 체크포인트 없음 — 결과 무의미. 먼저 run()으로 모델을 저장하세요.")
+        print("⚠️  학습된 체크포인트 없음 — 결과 무의미. "
+              "먼저 notebooks/colab_template.ipynb Cell 7a를 실행해 모델을 저장하세요.")
     model.eval()
 
     raw_files: list[Path] = []
