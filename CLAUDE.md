@@ -146,16 +146,14 @@ model, result = train_model(model, ds, ds, cfg)
 print('OK:', result.accuracy)
 "
 
-# Exp B smoke test (mock 모드)
-python -c "from experiments.exp_b_ph_scattering import run; print(run(use_mock=True, epochs=2, n_interp=2))"
-
 # Exp A 직접 실행
 python experiments/exp_a_clutter_transfer.py --mock
 python experiments/exp_a_clutter_transfer.py --ssim  # SSIM 분석
 
-# Exp B 직접 실행
-python experiments/exp_b_ph_scattering.py --mock
-python experiments/exp_b_ph_scattering.py --gradcam --checkpoint results/exp_b/model.pth
+# Exp B — 학습은 notebooks/colab_template.ipynb Cell 7a(MATLAB .mat + precomputed_aug.py).
+# 이 CLI는 학습된 체크포인트에 대한 해석가능성 분석만 제공.
+python experiments/exp_b_ph_scattering.py --checkpoint results/exp_b/smpl_ph_aug.pth       # Grad-CAM (기본)
+python experiments/exp_b_ph_scattering.py --xai --checkpoint results/exp_b/smpl_ph_aug.pth # Occlusion/SmoothGrad-IG
 
 # Exp C 직접 실행
 python experiments/exp_c_contrast_optuna.py --mock
@@ -177,7 +175,9 @@ python scripts/diag_mstar_format.py
 SARSample: image[1,H,W] float32, label:int, meta:dict
 SARDataset: __getitem__→SARSample, __len__, class_names:list[str]
 TrainConfig: model_name, num_classes, epochs=60, batch_size=128,
-             lr=1e-3, lr_decay_epoch=50, loss_type="lsm"|"at"
+             lr=1e-3, lr_decay_epoch=50, loss_type="lsm"|"at",
+             optimizer="adam"|"sgd" (기본 adam — SAR 데이터에서 SGD보다 빠르게 수렴,
+             의도적 변경. lr_decay_epoch/factor는 adam에도 그대로 적용)
 EvalResult: accuracy, confusion_matrix, per_class_accuracy,
             auroc=None, tnr_at_95tpr=None
 ```
@@ -193,9 +193,11 @@ EvalResult: accuracy, confusion_matrix, per_class_accuracy,
 ### 데이터 흐름
 ```
 raw MSTAR binary → read_mstar_raw()([진폭 블록]) / read_mstar_complex()(진폭·exp(i·위상))
-                 → interpolate_phase_history() → amplitude_to_tensor()
+                 → amplitude_to_tensor()
 PNG/JPEG images  → PIL.Image → numpy → torch.Tensor [1,H,W] (리사이즈)
 ```
+Exp B 증강 이미지는 이 경로를 안 탄다 — MATLAB 희소복원(Eq.7)이 만든 `.mat`을
+`augmentation/precomputed_aug.py`가 직접 로드한다(아래 Exp B 노선 참조).
 
 ### 학습 파이프라인
 `train_model(model, train_ds, test_ds, config)` → `(model, EvalResult)`  
@@ -257,22 +259,20 @@ SAMPLE 클래스 10개 (소문자): `2s1 bmp2 btr70 m1 m2 m35 m60 m548 t72 zsu23
 
 ## 알려진 설계 결정 및 주의사항
 
-**⚠️ Exp B 재설계 필요 (논문과 불일치):** 현재 코드는 7개 Mixed Targets 클래스 전체 데이터(2049장)로 학습해 98%가 나오지만, **논문 Table 3은 5클래스(2S1,BMP2,BTR70,T72,ZSU23)를 클래스당 24~32장(총 136장)만 학습하는 few-shot 실험**이다 (baseline 56.6% → PH 증강 96.4%). BMP2/BTR70/T72는 Targets 패키지, 2S1/ZSU23는 Mixed Targets에 있음. 자세한 것은 `docs/PAPER_SPEC.md` Exp B 절 참조.
+**Exp B 학습 파이프라인:** `experiments/exp_b_ph_scattering.py`는 더 이상 자체 학습 루프를
+갖지 않는다. 과거 `run()`/`PHAugmentedDataset`는 azimuth 이웃 두 이미지를 PH 도메인에서
+단순 선형평균하는 방식(산란점 미사용, 논문 방법 아님, few-shot에서 65% 정체의 원인)이라
+**삭제**했다. 실제 학습은 노트북 Cell 7a가 MATLAB 희소복원 `.mat`을
+`augmentation/precomputed_aug.py`로 로드해 수행하며, 이 파일은 그 체크포인트에 대한
+Grad-CAM/XAI 해석가능성 분석(`run_gradcam_analysis`/`run_xai_analysis`)만 담당한다.
+`_collect_raw_files()`/`_depression_angle()`은 진단 스크립트(`scripts/diag_mstar_format.py`)와
+CAM 분석용 raw 파일 탐색에 계속 쓰이므로 남아있다.
 
-**Exp B 데이터 = CD1 + CD2 둘 다 로드** (`MSTAR_RAW_DIRS`). train 17° / test 15° — **15°는 CD1에만, 17°는 CD2에만** 있음.
-
-**Exp B train/test split:** `_split_train_test()` 사용 — **헤더 부각 기반 cross-depression split**.
-헤더 `DesiredDepression` 필드에서 부각을 읽어 전역 상위 2개 부각을 train/test로 분리 (`_depression_angle()`).
-- CD1+CD2 합산 시 7개 클래스 기준 17°(2049) / 15°(1838)가 상위 2개 → **train=17°, test=15°** (표준 SOC).
-- 특정 클래스가 두 부각 중 하나만 가지면 그 클래스만 클래스 내 랜덤 80/20, 부각을 아예 못 읽으면 전체 stratified 폴백 (0% 방지).
-- 같은 부각 내 랜덤 분할 시 99%+ 정확도 (trivial) — 논문 재현 불가.
-- ⚠️ **파일 확장자로 앙각 판별 금지** (Mixed Targets 확장자 `.001`/`.015`는 앙각이 아니라 일련번호; `.015` 파일의 실제 부각이 16°인 경우도 있음).
+**부각(depression angle) 판별:** `_depression_angle()` — 헤더 `DesiredDepression` 필드 사용.
+⚠️ **파일 확장자로 앙각 판별 금지** (Mixed Targets 확장자 `.001`/`.015`는 앙각이 아니라 일련번호; `.015` 파일의 실제 부각이 16°인 경우도 있음).
 
 **Taylor 윈도우:** `scipy.signal.windows.taylor(sll=35)` — **양수** 값 사용.
 `sll=-35` 시 `arccosh` 정의역 위반 → NaN → 합성 이미지 전부 zeros.
-
-**`PHAugmentedDataset`:** lazy loading 설계 — `__init__`에서 경로 튜플만 저장,
-실제 I/O는 `__getitem__`에서만 수행. eager loading 복귀 시 `num_samples=0` 발생.
 
 **`FolderDataset` (exp_d):** Phoenix 헤더 확인 (`b"PhoenixHeaderVer"` in 첫 100바이트)
 후 파일 필터링. 헤더 없는 파일 학습 시 zeros 데이터 문제.

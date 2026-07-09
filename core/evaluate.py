@@ -137,7 +137,7 @@ def _odin_scores(
             loss.backward()
             perturbed = (imgs - epsilon * imgs.grad.sign()).detach().clamp(0.0, 1.0)
             with torch.no_grad():
-                s = F.softmax(model(perturbed), dim=1).max(1).values  # perturbation 후 unscaled
+                s = F.softmax(model(perturbed) / temperature, dim=1).max(1).values
             scores.append(s.cpu().numpy())
         return np.concatenate(scores)
 

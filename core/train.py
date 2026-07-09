@@ -66,9 +66,9 @@ def train_model(
     """
     Train model and return (trained_model, val_EvalResult).
 
-    Follows TrainConfig defaults from spec:
-      - SGD + momentum=0.9, weight_decay=1e-4
-      - LR drops by lr_decay_factor at lr_decay_epoch
+    Follows TrainConfig defaults:
+      - Adam (weight_decay=1e-4), or SGD(momentum=0.9, weight_decay=1e-4) if config.optimizer="sgd"
+      - LR drops by lr_decay_factor at lr_decay_epoch (applies to either optimizer)
       - loss_type='lsm' → label smoothing CE; 'at' → FGSM adversarial training
     """
     _set_seed(config.seed)

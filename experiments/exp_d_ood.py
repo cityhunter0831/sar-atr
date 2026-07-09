@@ -264,14 +264,17 @@ def run(
         ckpt = checkpoint_dir / f"{model_name}_seed{seed}_j{j}.pth"
         model = get_model(model_name, num_classes=len(known))
 
+        loaded = False
         if ckpt.exists():
             try:
                 model.load_state_dict(torch.load(ckpt, map_location="cpu"))
                 print(f"  Loaded checkpoint: {ckpt}")
+                loaded = True
             except RuntimeError:
                 print(f"  Checkpoint 구조 불일치 — 처음부터 학습합니다: {ckpt}")
-                ckpt = Path("nonexistent")  # force retrain
-        else:
+                model = get_model(model_name, num_classes=len(known))  # 부분 로드된 가중치 폐기, 새 모델로 재시작
+
+        if not loaded:
             print(f"  Training {model_name} (J={j}, seed={seed}) ...")
             config = TrainConfig(
                 model_name=model_name,
