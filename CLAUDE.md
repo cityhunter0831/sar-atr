@@ -106,6 +106,25 @@ Table 6 최종본 생성 → (3) 전체 결과로 `docs/PAPER_SPEC.md`/`docs/DAT
 `/root/.claude/plans/nested-exploring-rabbit.md` 참조(세션 로컬 경로 — 새 세션에서 파일이 없으면
 이 절이 그 내용을 대체함).
 
+### Exp D 버그 A/B 수정 확인 완료 (2026-07 Colab 재실행)
+
+체크포인트 파일명에 `k` 태그 반영(버그 A) + `MSTARODataset`을 ID와 동일한 log-dB 정규화로 통일
+(버그 B) 수정(commit `c709039`) 후 재실행 — **두 버그 모두 실측으로 해결 확인됨**:
+
+| J | ID 정확도 | ODIN holdout/mstar_o/sarship | Maha holdout/mstar_o/sarship |
+|---|---|---|---|
+| 1 | **95.8%** (기존 21~29%→) | 0.928 / 0.901 / 0.962 | 0.825 / 0.941 / 0.899 |
+| 2 | **91.3%** | 0.835 / 0.890 / 0.956 | 0.832 / 0.895 / 0.943 |
+| 3 | **92.4%** | 0.860 / 0.857 / 0.946 | 0.792 / 0.951 / 0.892 |
+
+ID 정확도가 K=0.1+대비증강으로 실제 재학습되어 91~96%로 급등(버그 A 해결 확인), ODIN이 모든
+J·모든 OOD에서 0.83~0.96의 정상값(더 이상 0.000 역전 없음, 버그 B 해결 확인). near-OOD(holdout)가
+대체로 far-OOD(mstar_o/sarship)보다 낮은 AUROC를 보이는 경향도 논문의 일반적 직관과 일치.
+
+**다음 세션 우선순위(갱신)**: (1) Exp D `seeds=[0,1,2]`로 확장해 분산(±std) 확보 → (2) Exp C
+`run_paper_faithful(model_names=전체4개, seeds=[0,1,2])`로 Table 6 최종본 생성 → (3) 전체 결과로
+`docs/PAPER_SPEC.md`/`docs/DATASET_METHOD.md`/`docs/FINAL_REPORT.md`/발표 아티팩트 갱신.
+
 ---
 
 ## ⭐ Exp B 위상보간 — 완전판 구현 방향 (진행 중, 코어)
