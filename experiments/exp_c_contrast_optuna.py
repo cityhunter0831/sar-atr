@@ -262,6 +262,77 @@ def load_sample(
     return train_ds, test_ds
 
 
+class _ConcatSARDataset(SARDataset):
+    """여러 SARDataset을 이어붙임. class_names는 모두 동일하다고 가정(첫 데이터셋 기준)."""
+
+    def __init__(self, datasets: list[SARDataset]):
+        self._datasets = list(datasets)
+        self._lens = [len(d) for d in self._datasets]
+        self._class_names = self._datasets[0].class_names
+
+    def __len__(self) -> int:
+        return sum(self._lens)
+
+    def __getitem__(self, idx: int) -> SARSample:
+        for ds, n in zip(self._datasets, self._lens):
+            if idx < n:
+                return ds[idx]
+            idx -= n
+        raise IndexError(idx)
+
+    @property
+    def class_names(self) -> list[str]:
+        return self._class_names
+
+
+def make_k_mixed_datasets(
+    class_names: list[str] = SAMPLE_CLASSES,
+    k: float = 0.1,
+    seed: int = 0,
+) -> tuple[SARDataset, SARDataset]:
+    """
+    논문 Section 4.3 K 정의 재현: K = 학습셋 중 실측(measured) 샘플의 비율
+    (K=0 → 100% synthetic, K=1 → 100% measured). Exp C/D 공용.
+
+    synth은 전량(K=0 baseline과 동일 규모) 사용. real은 클래스별로 K/(1-K) 비율만큼
+    무작위로 뽑아 학습에 섞고, 학습에 쓰지 않은 나머지 real만 평가(test_id_ds)에
+    쓴다 — 같은 real 이미지가 학습·평가 양쪽에 들어가는 누수를 방지.
+
+    K=0이면 (synth_ds, real_ds) 그대로 반환해 기존 K=0 경로와 동일하게 동작.
+    """
+    synth_ds = SampleDataset(SAMPLE_ROOT, "synth", class_names)
+    real_ds = SampleDataset(SAMPLE_ROOT, "real", class_names)
+    if k <= 0:
+        return synth_ds, real_ds
+
+    rng = np.random.default_rng(seed)
+
+    synth_by_class: dict[int, int] = {}
+    for _, label in synth_ds._samples:
+        synth_by_class[label] = synth_by_class.get(label, 0) + 1
+
+    real_by_class: dict[int, list[int]] = {}
+    for i, (_, label) in enumerate(real_ds._samples):
+        real_by_class.setdefault(label, []).append(i)
+
+    train_real_idx: list[int] = []
+    test_real_idx: list[int] = []
+    for label, idxs in real_by_class.items():
+        idxs = list(idxs)
+        rng.shuffle(idxs)
+        n_synth_cls = synth_by_class.get(label, 0)
+        n_real_train = min(len(idxs), max(1, round(k / (1 - k) * n_synth_cls))) if n_synth_cls > 0 else 0
+        train_real_idx.extend(idxs[:n_real_train])
+        test_real_idx.extend(idxs[n_real_train:])
+
+    train_real_ds = IndexSubset(real_ds, train_real_idx)
+    test_id_ds = IndexSubset(real_ds, test_real_idx)
+    train_mixed = _ConcatSARDataset([synth_ds, train_real_ds])
+    print(f"  K={k}: synth {len(synth_ds)}장 + real(train) {len(train_real_ds)}장 "
+          f"= 학습 {len(train_mixed)}장, 평가용 real(test) {len(test_id_ds)}장")
+    return train_mixed, test_id_ds
+
+
 # ─── Data loading (MSTAR El ablation — 보조) ──────────────────────────────────
 
 def _data_available() -> bool:

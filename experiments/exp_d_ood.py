@@ -1,19 +1,21 @@
 """
 Exp D — OOD Detection (권승주)
 
-Setup:
-    - In-distribution (ID): MSTAR 10-class, trained model from Exp A
-    - Holdout: J=1,2,3 unknown classes withheld from training
-    - Outlier Exposure (OE): SAR-ship dataset as hard negatives
+Setup (논문 Section 4.4, 원문 페이지 이미지 대조로 확정):
+    - In-distribution (ID): SAMPLE 10-class, K=0.1(실측 10%+합성 90% 혼합, make_k_mixed_datasets)
+    - Holdout: J=1,2,3 — HLD1={M1}, HLD2={M35,M548}, HLD3={M1,M35,M548}
+    - Outlier Exposure (OE): SAR-ship (+MiniSAR, 비공개라 미포함) — 학습 재료일 뿐 OOD 테스트 아님
+    - Figure 9 재현의 실제 OOD 테스트 3종은 Holdout/MSTAR-O/MSTAR-P
+      (SAR-ship을 far-OOD로 같이 보는 건 우리가 추가한 보조 검증, 논문 Figure 9엔 없음)
 
 Comparison:
     ODIN  vs  Mahalanobis
     → AUROC and TNR@95TPR
 
 Expected structure:
-    data/mstar/mixed_targets/<class>/          (all 10 classes)
-    data/sarship/                              (SAR-ship images)
-    results/exp_a/<model>_seed0.pth            (trained checkpoint)
+    data/sample/png_images/decibel/{real,synth}/<class>/   (SAMPLE, exp_c와 공유)
+    data/sarship/                              (SAR-ship images, OE 학습 재료)
+    results/exp_a/<model>_seed0_j<j>.pth       (Exp D 자체 체크포인트 — exp_a와 폴더만 공유)
 """
 from __future__ import annotations
 
@@ -39,7 +41,9 @@ SARSHIP_DIR = Path("data/sarship")
 # SAMPLE 클래스 #0~#9 (논문 Figure 10 순서). exp_c의 SampleDataset·클래스 리스트를 그대로 재사용
 # — 리스트를 이 파일에 따로 하드코딩하면 두 파일이 드리프트할 수 있어(과거에 실제로 순서가 어긋난 적 있음)
 # 단일 소스(exp_c.SAMPLE_CLASSES)를 공유한다.
-from experiments.exp_c_contrast_optuna import SampleDataset, SAMPLE_ROOT, SAMPLE_CLASSES  # noqa: E402
+from experiments.exp_c_contrast_optuna import (  # noqa: E402
+    SampleDataset, SAMPLE_ROOT, SAMPLE_CLASSES, make_k_mixed_datasets,
+)
 ALL_CLASSES = SAMPLE_CLASSES
 
 # Holdout combinations: J개 SAMPLE 클래스를 학습에서 제외 (near-OOD).
@@ -173,7 +177,7 @@ def _data_available() -> bool:
 
 
 def load_id_holdout(
-    j: int = 1, class_names: list[str] = ALL_CLASSES
+    j: int = 1, class_names: list[str] = ALL_CLASSES, k: float = 0.1, seed: int = 0,
 ) -> tuple[SARDataset, SARDataset, SARDataset, "SARDataset | None"]:
     """
     T6 재설계: ID = SAMPLE 10클래스. Holdout = J개 SAMPLE 클래스(near-OOD),
@@ -181,6 +185,9 @@ def load_id_holdout(
     Returns (train_ds, test_id_ds, test_holdout_ds, oe_ds).
     SAMPLE 데이터 자체가 없으면 4개 모두 mock. SAR-ship만 없으면 oe_ds=None
     (mock으로 대체하지 않음 — 의미 없는 far-OOD 숫자가 결과에 섞이는 것을 방지).
+
+    k: 논문 Figure 9/10/11 헤드라인 설정(K=0.1, 학습셋 중 실측 비율). K=0을 원하면
+    k=0으로 호출 — 이 경우 기존과 동일하게 synth 전량/real 전량으로 학습/평가한다.
     """
     holdout = HOLDOUT_CONFIGS[j]
     known = [c for c in class_names if c not in holdout]
@@ -194,9 +201,9 @@ def load_id_holdout(
             MockSARDataset(n=100, num_classes=1, seed=3),  # mock OE
         )
 
-    # ID 학습 = SAMPLE synth(known), ID 테스트 = SAMPLE real(known) — 논문 K=0 시나리오
-    train_ds = SampleDataset(SAMPLE_ROOT, "synth", known)
-    test_id_ds = SampleDataset(SAMPLE_ROOT, "real", known)
+    # ID 학습 = SAMPLE synth(known)+real 일부(K 비율 혼합), ID 테스트 = 학습에 안 쓴 나머지 real
+    print(f"[Exp D] K={k} 혼합 데이터 구성 (known={len(known)}클래스)")
+    train_ds, test_id_ds = make_k_mixed_datasets(known, k=k, seed=seed)
     # near-OOD = 학습 제외된 SAMPLE 클래스 (real)
     test_holdout_ds = SampleDataset(SAMPLE_ROOT, "real", holdout)
 
@@ -269,7 +276,9 @@ def run(
     seed: int = 0,
     j_list: list[int] = [1, 2, 3],
     save_dir: Path = RESULTS_DIR,
+    k: float = 0.1,
 ) -> list[dict]:
+    """k: 논문 헤드라인 설정(Figure 9/10/11) = 0.1. K=0(100% synthetic)으로 돌리려면 k=0."""
     save_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     all_results = []
@@ -279,7 +288,7 @@ def run(
         holdout = HOLDOUT_CONFIGS[j]
         known = [c for c in ALL_CLASSES if c not in holdout]
 
-        train_ds, test_id_ds, holdout_ds, oe_ds = load_id_holdout(j)
+        train_ds, test_id_ds, holdout_ds, oe_ds = load_id_holdout(j, k=k, seed=seed)
 
         # Load or train model
         ckpt = checkpoint_dir / f"{model_name}_seed{seed}_j{j}.pth"
@@ -341,6 +350,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--j", type=int, nargs="+", default=[1, 2, 3])
+    parser.add_argument("--k", type=float, default=0.1, help="논문 헤드라인=0.1, K=0(100%% synthetic)이면 0")
     args = parser.parse_args()
     run(
         model_name=args.model,
@@ -348,4 +358,5 @@ if __name__ == "__main__":
         epochs=args.epochs,
         seed=args.seed,
         j_list=args.j,
+        k=args.k,
     )
