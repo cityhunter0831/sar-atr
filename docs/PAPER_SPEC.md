@@ -140,13 +140,18 @@ ResNet18, train El17°→test El30°: 원본(밝기 편향) 97.2% / 대비보정
 
 핵심: **Mahalanobis(AdvOE)가 대부분 최고**. cross-dataset(MSTAR-O/P)은 쉬움, holdout(같은 SAMPLE 내 미지 클래스)은 어려움. M35(#5)+M548(#6) 동시 holdout 시 TNR 100% (외형이 독특).
 
-### 현재 코드와의 차이 (큼)
-| 항목 | 논문 | 현재 코드 |
-|---|---|---|
-| ID 데이터 | **SAMPLE 10클래스** | MSTAR Mixed 10클래스 |
-| OOD 테스트 | Holdout + MSTAR-O + MSTAR-P | Holdout + SAR-ship |
-| SAR-ship 역할 | **OE 학습셋** | OOD 테스트셋 |
-- 우리는 SAR-ship을 OOD 테스트로 썼지만, 논문은 **OE 학습용**. ID도 SAMPLE이어야 함. 재설계 필요.
+### 현재 코드와의 차이 (2026-07 원문 페이지 이미지 재대조 반영)
+| 항목 | 논문 | 현재 코드 | 상태 |
+|---|---|---|---|
+| ID 데이터 | SAMPLE 10클래스 | SAMPLE 10클래스 | ✅ 일치 |
+| Holdout 클래스(HLD1/2/3) | {M1} / {M35,M548} / {M1,M35,M548} | 동일 | ✅ 일치 (원문 이미지 대조로 정정 완료) |
+| ID 학습 K | **0.1**(실측 10% 혼합) | 0(100% synthetic) | 🔴 미구현 — Figure 13에서 K=0가 "최악 조건"으로 명시된 값 |
+| OOD 테스트 3종 | Holdout + MSTAR-O + MSTAR-P | Holdout + SAR-ship | 🔴 MSTAR-O/P 미구현. SAR-ship은 논문엔 없는 "우리가 추가한 보조 far-OOD"로만 취급해야 함 |
+| SAR-ship 역할 | **OE 학습 재료** (MiniSAR와 함께) | OOD 테스트로 오용 중 | 🔴 서술·역할 정정 필요 |
+| ID 학습 시 대비 증강 | 적용(Section 3) | 미적용 | 🔴 미구현 |
+| AdvOE(Eq.4, adversarial OE 목적함수) | 학습 시점에 결합 | 미구현(사후 ODIN/Mahalanobis 스코어링만) | 🔴 공수 큰 항목, 스트레치 목표 |
+
+MSTAR-O(BRDM2/BTR60/D7/T62/ZIL131)는 우리가 이미 가진 Mixed Targets CD1/CD2 raw로 구성 가능해 우선순위 높음. MSTAR-P는 논문이 정확한 출처(URL)를 안 밝혀 100% 동일 소스는 특정 불가하지만, 동일 5클래스의 유사 공개 이미지 자료는 존재 — 논문도 "MSTAR-P가 MSTAR-O보다 탐지하기 쉽다"고 명시해 상대적으로 우선순위 낮음.
 
 ---
 

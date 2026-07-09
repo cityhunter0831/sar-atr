@@ -57,18 +57,73 @@ Geng et al. 2023 ("Target Recognition in SAR Images by Deep Learning with Traini
 ### 🔧 트러블슈팅 (논문과 어긋남 = 수정 대상)
 | # | 실험 | 문제 → 논문 정답 | 상태 |
 |---|---|---|---|
-| T1 | Exp B | 7클래스 전체(2049장) → 5클래스 **few-shot 136장** (56.6%) | ✅ 코드 반영 (`few_shot=True`, 5클래스, `FEWSHOT_COUNTS`) |
-| T2 | Exp B | 128 resize → **64×64 center-crop** | ✅ `amplitude_to_tensor(center_crop=64)` |
-| T3 | Exp B | CE → **AT(ε=2)/LSM** | ✅ `run(loss_type='at'/'lsm')` |
-| T4 | Exp B | 인접파일 보간 → **azimuth 이웃 PH 보간** | ✅ `read_azimuth` 정렬 pairing |
+| T1 | Exp B | 7클래스 전체(2049장) → 5클래스 **few-shot 136장** (56.6%) | ✅ MATLAB `.mat` 하이브리드 파이프라인(`augmentation/precomputed_aug.py`, 노트북 Cell 7a)으로 대체 완료. 구식 `run()`/`PHAugmentedDataset`(few_shot/FEWSHOT_COUNTS 등)는 삭제됨 — 아래 "Exp B 학습 파이프라인" 참조. |
+| T2 | Exp B | 128 resize → **64×64 center-crop** | ✅ `amplitude_to_tensor(center_crop=64)` (precomputed_aug 파이프라인에서도 유지) |
+| T3 | Exp B | CE → **AT(ε=2)/LSM** | ✅ 노트북 Cell 7a `TrainConfig(loss_type='at')` |
+| T4 | Exp B | 인접파일 보간 → **azimuth 이웃 PH 보간** | ✅ MATLAB 희소복원(Eq.7)로 대체 — 파일 순서 보간이 아니라 산란점 기반 물리적 재합성 |
 | T5 | Exp A | TrainCTx2 붕괴(39%) → 회복(**96.0%**) | ✅ 3563장 정상 로드 확인. SMPL **98.8±0.3%** / RN18 **99.9±0.1%** (논문 96.0/98.4% 초과 달성) |
-| T6 | Exp D | ID=MSTAR → **ID=SAMPLE 10클래스**, SAR-ship=far-OOD | ✅ `SampleDataset` 기반 재설계 |
-| T7 | Exp C | 목표 불명확 → K=0 **RN18 94.5%** 명시 | ✅ `_print_figure1` 수정 |
-| T8 | Exp B | σ_G 라인서치 제거 필요성 → **σ_G=1.0 고정 확정** | ✅ 2S1 대표이미지 잔차 차이 0.002% 정량 검증. 재복원 불필요. |
+| T6 | Exp D | ID=MSTAR → **ID=SAMPLE 10클래스** | ✅ `SampleDataset` 기반 재설계 |
+| T6b | Exp D | Figure 9는 SAR-ship이 아니라 **Holdout/MSTAR-O/MSTAR-P** 3종 OOD 테스트를 비교(원문 p.17 이미지 확인). SAR-ship+MiniSAR은 **OE 학습 재료**일 뿐 Figure 9의 OOD 테스트셋이 아님 | ✅ MSTAR-O(BRDM2/BTR60/D7/T62/ZIL131, Mixed Targets raw) `MSTARODataset`/`load_mstar_o()`로 구현·`run_ood_experiment()`에 편입. SAR-ship은 "우리가 추가한 보조 far-OOD"로 명확히 구분해 서술 중. MSTAR-P는 여전히 미구현(우선순위 낮음, 아래 참조). |
+| T6c | Exp D | `HOLDOUT_CONFIGS`가 논문 HLD1/2/3과 다름(J=1이 m548이 아니라 M1이어야 함 등) — 원문 p.18 Figure 11 + p.19 Section 4.4.2 이미지 대조로 확정 | ✅ `{1:["m1"], 2:["m35","m548"], 3:["m1","m35","m548"]}`로 정정 완료 |
+| T6d | Exp D | ID 학습이 K=0(100% synthetic)로 도는데 논문 Figure 9/10/11 헤드라인은 **K=0.1**(10% 실측 혼합) — Figure 13에서 K=0가 "최악 조건"으로 명시됨 | ✅ `make_k_mixed_datasets(k=0.1)` 기본값으로 `load_id_holdout()`에 적용, ID 학습에 3단계 대비 증강(`SampleContrastDataset`)도 결합. Colab 1차 실행에서 Exp C 쪽은 방향성(Aug>Ori) 검증됨(아래 "Colab 1차 실행 결과" 참조) — Exp D 쪽은 버그 A(아래)로 아직 미검증. |
+| T7 | Exp C | 목표 불명확 → K=0 **RN18 94.5%** 명시 | ✅ `_print_figure1` 수정 + `run_paper_faithful()`(4모델×K 0/0.05/0.1, `exp_c_contrast_optuna.py --paper-faithful`)로 Table 6 전체 구조 구현. Colab 1차 실행(RN18만, seed=1)에서 모든 K에서 Aug>Ori 확인 — 상세는 "Colab 1차 실행 결과" 참조. |
+| T8 | Exp B | σ_G 라인서치 제거 필요성 → **σ_G=1.0 고정 확정** | ✅ 2S1 대표이미지 잔차 차이 0.002% 정량 검증. 재복원 불필요. (σ_G 자체는 이 논문이 아니라 Agarwal 원 논문 소관 — 원문 재확인 완료) |
 | ✅ | 공통 | ~~BUG-X1~X4 (Taylor 부호/오프셋/포맷)~~ | 완료 |
 
 > **T1~T8, BUG-X1~X4 모두 완료.** Exp A 수치 Colab 실행으로 검증 완료 (SMPL 98.8%, RN18 99.9%).
 > Exp B 실행: `run(model_name='smpl', loss_type='at')` → 목표 SMPL/AT **56.6%→96.4%** (few-shot이 핵심).
+
+### Exp C/D Colab 1차 실행 결과 (2026-07) 및 이후 발견·수정된 버그 2건
+
+**Exp C 논문 충실 재현 (`run_paper_faithful`, RN18만·seed=1) — 방향성 확인됨:**
+
+| K | Ori | Aug | 논문(RN18) |
+|---|---|---|---|
+| 0.0 | 63.8% | **87.7%** (+23.9pp) | 91.9%→94.5% (+2.6pp) |
+| 0.05 | 93.8% | **94.4%** (+0.6pp) | (미보고) |
+| 0.1 | 95.7% | **96.9%** (+1.2pp) | 97.8%→98.9% (+1.1pp) |
+
+모든 K에서 Aug>Ori — 논문 핵심 주장 재현됨. K=0에서 격차가 논문보다 큰 이유(우리 Ori 베이스라인이
+논문보다 낮음)는 원인 미조사(seed 1개뿐, 낮은 우선순위) — seeds=[0,1,2]+4모델 전체 확장 시 재확인 필요.
+
+**같은 실행에서 Exp D 버그 2건 발견, 둘 다 수정 완료(commit `c709039`):**
+- **버그 A (체크포인트 캐시 무효화 누락)**: `run()`의 체크포인트 파일명이 `k`/`use_contrast`를
+  반영하지 않아, K=0→K=0.1로 설정을 바꿔도 옛 모델을 그대로 재사용(재학습 안 됨) — 그래서 1차 실행의
+  Exp D OOD 수치는 무효였음. **수정**: 파일명에 `k` 태그 포함(`{model}_seed{seed}_j{j}_k{k}.pth`).
+  **재실행 필요** — Drive의 옛 `results/exp_a/*_j*.pth`(k 태그 없는 구파일)는 새 코드가 자동으로
+  무시하고 새로 학습하지만, 디스크 정리하려면 수동 삭제해도 됨.
+- **버그 B (ODIN AUROC=0.000 정확히 — far-OOD에서 재현성 있게 발생)**: 원인 확정 — ID(SAMPLE) 학습은
+  log-dB 압축 정규화(`_normalize_amplitude`)를 쓰는데, `MSTARODataset`은 `amplitude_to_tensor()`로
+  **선형** 정규화를 써서 픽셀 값이 소수 산란점에만 몰림(합성 검증: 동일 이미지 기준 평균 밝기
+  0.011 vs 0.29) — ID와 다른 정규화가 심각한 도메인 시프트를 만들어 ODIN이 far-OOD를 항상 ID보다
+  더 "자신있게" 분류(= AUROC 완전 역전)한 것으로 결론. **수정**: `MSTARODataset`도 동일한 log-dB
+  "original" 프리셋으로 통일. SAR-ship(이미 렌더링된 PNG)은 원인 대상이 아니라 그대로 둠.
+
+**다음 세션 우선순위**: (1) Exp D를 K=0.1+새 체크포인트 태그로 재실행해 버그 A/B 수정이 실제로
+ID 정확도·ODIN AUROC를 개선하는지 확인 → (2) 확인되면 Exp C `seeds=[0,1,2]`+4모델 전체로 확장,
+Table 6 최종본 생성 → (3) 전체 결과로 `docs/PAPER_SPEC.md`/`docs/DATASET_METHOD.md`/
+`docs/FINAL_REPORT.md`/발표 아티팩트 갱신. 상세 감사 근거(원문 페이지 이미지 대조 전체)는
+`/root/.claude/plans/nested-exploring-rabbit.md` 참조(세션 로컬 경로 — 새 세션에서 파일이 없으면
+이 절이 그 내용을 대체함).
+
+### Exp D 버그 A/B 수정 확인 완료 (2026-07 Colab 재실행)
+
+체크포인트 파일명에 `k` 태그 반영(버그 A) + `MSTARODataset`을 ID와 동일한 log-dB 정규화로 통일
+(버그 B) 수정(commit `c709039`) 후 재실행 — **두 버그 모두 실측으로 해결 확인됨**:
+
+| J | ID 정확도 | ODIN holdout/mstar_o/sarship | Maha holdout/mstar_o/sarship |
+|---|---|---|---|
+| 1 | **95.8%** (기존 21~29%→) | 0.928 / 0.901 / 0.962 | 0.825 / 0.941 / 0.899 |
+| 2 | **91.3%** | 0.835 / 0.890 / 0.956 | 0.832 / 0.895 / 0.943 |
+| 3 | **92.4%** | 0.860 / 0.857 / 0.946 | 0.792 / 0.951 / 0.892 |
+
+ID 정확도가 K=0.1+대비증강으로 실제 재학습되어 91~96%로 급등(버그 A 해결 확인), ODIN이 모든
+J·모든 OOD에서 0.83~0.96의 정상값(더 이상 0.000 역전 없음, 버그 B 해결 확인). near-OOD(holdout)가
+대체로 far-OOD(mstar_o/sarship)보다 낮은 AUROC를 보이는 경향도 논문의 일반적 직관과 일치.
+
+**다음 세션 우선순위(갱신)**: (1) Exp D `seeds=[0,1,2]`로 확장해 분산(±std) 확보 → (2) Exp C
+`run_paper_faithful(model_names=전체4개, seeds=[0,1,2])`로 Table 6 최종본 생성 → (3) 전체 결과로
+`docs/PAPER_SPEC.md`/`docs/DATASET_METHOD.md`/`docs/FINAL_REPORT.md`/발표 아티팩트 갱신.
 
 ---
 
